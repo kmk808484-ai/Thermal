@@ -121,6 +121,98 @@
   .doc-card { background: #0f172a; border: 1px solid var(--border); border-radius: 8px; padding: 11px; margin-bottom: 10px; font-size: 12px; line-height: 1.65; }
   .doc-card h3 { color: var(--accent); font-size: 13px; margin-bottom: 4px; }
   .doc-card code { background: #1e293b; color: #facc15; padding: 2px 6px; border-radius: 4px; font-size: 11.5px; }
+/* ================= 모바일 반응형 레이아웃 ================= */
+@media (max-width: 900px) {
+  body {
+    height: auto;
+    min-height: 100vh;
+    overflow-y: auto;
+  }
+
+  /* 상단 툴바 및 탭 줄바꿈 허용 */
+  .toolbar {
+    height: auto;
+    flex-direction: column;
+    align-items: stretch;
+    padding: 8px 10px;
+    gap: 8px;
+  }
+  .page-tabs, .toolbar-btns {
+    flex-wrap: wrap;
+    gap: 5px;
+  }
+  .page-btn {
+    flex: 1 1 auto;
+    text-align: center;
+    font-size: 11px;
+    padding: 6px 6px;
+  }
+
+  .page.active {
+    display: block;
+    overflow: visible;
+  }
+
+  /* 3단 캔버스 -> 1단 세로 배치 */
+  .workspace {
+    display: flex;
+    flex-direction: column;
+    overflow: visible;
+  }
+
+  /* 팔레트: 가로 1줄 배치 */
+  .palette {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    flex-direction: row;
+    flex-wrap: wrap;
+    padding: 8px;
+  }
+  .palette h2, .palette-help {
+    display: none;
+  }
+  .palette-item {
+    flex: 1 1 30%;
+    padding: 6px;
+    justify-content: center;
+  }
+  .palette-item .desc {
+    display: none;
+  }
+
+  /* 캔버스 & 플랏터 높이 확보 */
+  .canvas-wrap {
+    height: 380px;
+    flex: none;
+    overflow: auto;
+  }
+  .plotter {
+    height: 260px;
+  }
+  .plotter-bar {
+    height: auto;
+    flex-wrap: wrap;
+    padding: 6px 8px;
+    gap: 6px;
+  }
+
+  /* 속성창: 하단 전체 너비 */
+  .inspector {
+    border-left: none;
+    border-top: 2px solid var(--border);
+    overflow: visible;
+  }
+
+  /* 단품 점검 / 물성치 / 솔버 탭: 1단 배치 & KPI 2열 */
+  .single-layout {
+    grid-template-columns: 1fr;
+    padding: 10px;
+    gap: 12px;
+  }
+  .kpi-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
 </style>
 </head>
 <body>
