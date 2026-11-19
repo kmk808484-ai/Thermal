@@ -1,0 +1,864 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>1D 냉동사이클 시뮬레이터 (에너지 평형 솔버 · P-h 선도 · 회전형)</title>
+<style>
+  :root {
+    --bg: #0b1120; --panel: #1e293b; --panel-dark: #0f172a;
+    --border: #334155; --text: #f1f5f9; --muted: #94a3b8;
+    --accent: #38bdf8; --green: #22c55e; --warn: #f59e0b;
+    --hot: #f97316; --purple: #a78bfa; --danger: #ef4444;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "Malgun Gothic", "Segoe UI", system-ui, sans-serif;
+    background: var(--bg); color: var(--text);
+    height: 100vh; display: flex; flex-direction: column; overflow: hidden; user-select: none;
+  }
+  #errBanner { display: none; background: #7f1d1d; color: #fecaca; padding: 8px 16px; font-size: 12.5px; border-bottom: 1px solid #ef4444; }
+
+  .toolbar {
+    height: 48px; background: var(--panel); border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between; padding: 0 12px; flex-shrink: 0; gap: 8px;
+  }
+  .page-tabs { display: flex; gap: 4px; }
+  .page-btn {
+    background: #0f172a; color: var(--muted); border: 1px solid var(--border);
+    padding: 6px 9px; border-radius: 6px; font-size: 11.5px; font-weight: 700; cursor: pointer;
+  }
+  .page-btn.active { background: #0284c7; color: #fff; border-color: var(--accent); }
+  .toolbar-btns { display: flex; gap: 6px; align-items: center; }
+  .solver-sel { background: #0f172a; color: #38bdf8; border: 1px solid #0284c7; border-radius: 6px; padding: 4px 7px; font-size: 11.5px; font-weight: 600; }
+  .conv-badge { background: #1e293b; color: #cbd5e1; border: 1px solid var(--border); padding: 4px 8px; border-radius: 6px; font-size: 11px; white-space: nowrap; font-weight: 600; }
+  .conv-badge.running { border-color: #38bdf8; color: #38bdf8; background: #0284c722; }
+  .conv-badge.ok { border-color: #22c55e88; color: #4ade80; background: #15803d22; }
+  .conv-badge.fail { border-color: #ef4444; color: #fca5a5; background: #7f1d1d66; }
+  .cop-badge { background: #15803d33; color: #4ade80; border: 1px solid #22c55e66; padding: 4px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 700; white-space: nowrap; }
+
+  button { background: #334155; color: var(--text); border: 1px solid #475569; border-radius: 6px; padding: 5px 9px; font-size: 12px; cursor: pointer; }
+  button:hover { background: #475569; }
+  button.primary { background: #0284c7; border-color: #0ea5e9; font-weight: 600; }
+  button.green { background: #15803d; border-color: #22c55e; font-weight: 600; }
+  button.danger { background: #7f1d1d; border-color: #ef4444; }
+
+  .page { display: none; flex: 1; min-height: 0; overflow: hidden; }
+  .page.active { display: flex; }
+
+  .workspace { flex: 1; display: grid; grid-template-columns: 180px 1fr 325px; min-height: 0; overflow: hidden; }
+  .palette { background: var(--panel-dark); border-right: 1px solid var(--border); padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+  .palette h2 { font-size: 11px; color: var(--muted); }
+  .palette-item { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 9px; cursor: pointer; display: flex; align-items: center; gap: 8px; }
+  .palette-item:hover { border-color: var(--accent); }
+  .palette-item .title { font-size: 12px; font-weight: 700; }
+  .palette-item .desc { font-size: 10px; color: var(--muted); }
+  .palette-help { margin-top: auto; font-size: 10.5px; color: var(--muted); line-height: 1.55; background: #1e293b88; padding: 8px; border-radius: 8px; border: 1px solid var(--border); }
+
+  .center-col { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+  .canvas-wrap {
+    flex: 1; min-height: 0; position: relative; overflow: hidden;
+    background-color: var(--bg);
+    background-image: linear-gradient(to right, #1e293b44 1px, transparent 1px), linear-gradient(to bottom, #1e293b44 1px, transparent 1px);
+    background-size: 24px 24px;
+  }
+  #wireSvg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; }
+  .pipe-path { fill: none; stroke-width: 4.5; stroke-linecap: round; pointer-events: stroke; cursor: pointer; }
+  .pipe-path:hover { stroke-width: 7; stroke: #ef4444 !important; }
+  .temp-wire { fill: none; stroke: var(--accent); stroke-width: 3; stroke-dasharray: 6 4; }
+  #selectBox { position: absolute; display: none; z-index: 10; pointer-events: none; background: #38bdf822; border: 1.5px dashed var(--accent); border-radius: 3px; }
+  .pipe-label { position: absolute; transform: translate(-50%, -50%); background: #0f172aee; border: 1px solid var(--border); border-radius: 6px; padding: 2px 6px; font-size: 10px; white-space: nowrap; z-index: 3; pointer-events: none; }
+
+  .node { position: absolute; width: 100px; height: 100px; background: transparent; z-index: 2; cursor: move; }
+  .node-svg-wrap { width: 100px; height: 100px; transition: transform 0.15s ease; }
+  .node svg { display: block; overflow: visible; }
+  .node.selected svg { filter: drop-shadow(0 0 8px #38bdf8); }
+  .node:hover .node-del { opacity: 1; }
+  .node-del { position: absolute; top: -6px; right: -6px; width: 18px; height: 18px; border-radius: 50%; background: #7f1d1d; color: #fff; border: 1px solid #ef4444; font-size: 12px; line-height: 15px; text-align: center; cursor: pointer; opacity: 0; z-index: 6; padding: 0; }
+  .node-caption { position: absolute; top: 102px; left: 50%; transform: translateX(-50%); text-align: center; white-space: nowrap; pointer-events: none; background: #0f172add; padding: 2px 7px; border-radius: 6px; border: 1px solid #33415599; font-size: 10px; line-height: 1.35; }
+  @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  .spin-impeller { transform-origin: 50px 50px; animation: spin 2s linear infinite; }
+
+  .port { position: absolute; width: 13px; height: 13px; border-radius: 50%; background: #0f172a; border: 2.5px solid var(--accent); transform: translate(-50%, -50%); cursor: crosshair; z-index: 5; }
+  .port:hover { background: var(--accent); transform: translate(-50%, -50%) scale(1.3); }
+  .port-in { border-color: #38bdf8; }
+  .port-out { border-color: #f97316; }
+
+  .plotter { height: 240px; background: var(--panel-dark); border-top: 2px solid var(--border); display: flex; flex-direction: column; flex-shrink: 0; min-height: 0; }
+  .plotter-bar { height: 36px; background: var(--panel); border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; padding: 0 12px; font-size: 12px; flex-shrink: 0; }
+  .plotter-bar select { background: #0f172a; color: var(--accent); border: 1px solid var(--border); border-radius: 5px; padding: 3px 6px; font-size: 11.5px; }
+  .plotter-canvas-wrap { flex: 1; min-height: 0; padding: 8px 12px; display: flex; }
+  #plotCanvas, #propCanvas, #solverCanvas { width: 100%; height: 100%; display: block; background: #0b1120; border-radius: 6px; border: 1px solid var(--border); }
+
+  .inspector { background: var(--panel-dark); border-left: 1px solid var(--border); padding: 12px; overflow-y: auto; user-select: text; }
+  .inspector h2, .card h2 { font-size: 13.5px; color: var(--accent); margin-bottom: 9px; display: flex; justify-content: space-between; align-items: center; }
+  .field { margin-bottom: 8px; }
+  .field-row { display: flex; justify-content: space-between; align-items: center; font-size: 12px; margin-bottom: 3px; gap: 6px; }
+  .field-row label { color: var(--muted); }
+  input[type="number"], input[type="text"], select, textarea { background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 7px; font-size: 12px; }
+  input[type="number"] { width: 88px; text-align: right; }
+  select.full { width: 100%; }
+  textarea { width: 100%; height: 105px; font-family: Consolas, monospace; font-size: 11px; margin-top: 5px; }
+  .sub-tabs { display: flex; gap: 4px; margin-bottom: 5px; }
+  .sub-btn { flex: 1; background: var(--panel); color: var(--muted); border: 1px solid var(--border); padding: 4px; font-size: 11px; border-radius: 5px; }
+  .sub-btn.active { background: #0284c7; color: #fff; }
+  .res-box { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 9px; margin-top: 10px; font-size: 11.5px; line-height: 1.65; }
+  .res-box h3 { font-size: 12px; color: var(--green); margin-bottom: 4px; }
+  .model-box { background: #1e293b88; border: 1px solid var(--border); border-radius: 8px; padding: 8px; margin-bottom: 10px; }
+  .model-row { display: flex; gap: 5px; margin-top: 5px; }
+  .model-row select, .model-row input { flex: 1; min-width: 0; }
+
+  .single-layout { flex: 1; display: grid; grid-template-columns: 380px 1fr; gap: 16px; padding: 16px; overflow-y: auto; user-select: text; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px; margin-bottom: 14px; }
+  .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 14px; }
+  .kpi { background: var(--panel); border: 1px solid var(--border); border-radius: 9px; padding: 12px; }
+  .kpi .lbl { font-size: 11px; color: var(--muted); }
+  .kpi .val { font-size: 18px; font-weight: 700; margin-top: 4px; }
+  .kpi .sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+  .prog-track { width: 100%; height: 10px; background: #0f172a; border-radius: 999px; overflow: hidden; border: 1px solid var(--border); margin: 8px 0; }
+  .prog-fill { height: 100%; width: 0%; background: var(--accent); transition: width 0.1s; }
+  .doc-card { background: #0f172a; border: 1px solid var(--border); border-radius: 8px; padding: 11px; margin-bottom: 10px; font-size: 12px; line-height: 1.65; }
+  .doc-card h3 { color: var(--accent); font-size: 13px; margin-bottom: 4px; }
+  .doc-card code { background: #1e293b; color: #facc15; padding: 2px 6px; border-radius: 4px; font-size: 11.5px; }
+</style>
+</head>
+<body>
+
+<div id="errBanner">
+  <b>모듈 로드 오류:</b> 같은 폴더에 <code>compressor.js</code>, <code>heat_exchanger.js</code>, <code>expansion_valve.js</code>, <code>solver.js</code> 파일이 모두 있는지 확인해 주세요.
+</div>
+
+<div class="toolbar">
+  <div class="page-tabs">
+    <button class="page-btn active" data-page="canvas">1. 통합 캔버스</button>
+    <button class="page-btn" data-page="comp">2. 압축기 단품</button>
+    <button class="page-btn" data-page="hx">3. 열교환기 단품</button>
+    <button class="page-btn" data-page="prop">4. 냉매 물성치</button>
+    <button class="page-btn" data-page="solver">5. 솔버 점검 &amp; 설명</button>
+  </div>
+  <div class="toolbar-btns" id="canvasToolbarBtns">
+    <select id="solverSelect" class="solver-sel">
+      <option value="energy_balance">솔버: 에너지 평형 (P2 자동 조절)</option>
+      <option value="fixed_point">솔버: 폐회로 (고정점 완화)</option>
+      <option value="aitken">솔버: 폐회로 (Aitken 가속)</option>
+      <option value="open_loop">솔버: 개회로 (단순 순차)</option>
+    </select>
+    <span class="conv-badge" id="convBadge">대기</span>
+    <span class="cop-badge" id="copBadge">COP: -</span>
+    <button class="primary" id="runBtn">▶ 실행</button>
+    <button id="sampleBtn">기본배치</button>
+    <button id="saveJsonBtn">저장</button>
+    <button id="loadJsonBtn">열기</button>
+    <input type="file" id="jsonFileInput" accept=".json" style="display:none;" />
+    <button class="danger" id="clearBtn">초기화</button>
+  </div>
+</div>
+
+<!-- [페이지 1] 통합 캔버스 -->
+<div id="page-canvas" class="page active">
+  <div class="workspace">
+    <div class="palette">
+      <h2>컴포넌트 추가</h2>
+      <div class="palette-item" data-add="compressor">
+        <svg width="30" height="24" viewBox="0 0 32 24"><polygon points="3,2 29,7 29,17 3,22" fill="#f9731622" stroke="#f97316" stroke-width="2"/></svg>
+        <div><div class="title" style="color:#f97316;">Compressor</div><div class="desc">압축기</div></div>
+      </div>
+      <div class="palette-item" data-add="hx">
+        <svg width="30" height="24" viewBox="0 0 32 24"><rect x="3" y="3" width="26" height="18" rx="3" fill="#22c55e22" stroke="#22c55e" stroke-width="2"/><polyline points="6,9 11,15 16,9 21,15 26,9" fill="none" stroke="#38bdf8" stroke-width="1.8"/></svg>
+        <div><div class="title" style="color:#22c55e;">Heat Exchanger</div><div class="desc">응축/증발 자동</div></div>
+      </div>
+      <div class="palette-item" data-add="valve">
+        <svg width="30" height="24" viewBox="0 0 32 24"><polygon points="4,4 16,12 4,20" fill="#a78bfa22" stroke="#a78bfa" stroke-width="2"/><polygon points="28,4 16,12 28,20" fill="#a78bfa22" stroke="#a78bfa" stroke-width="2"/></svg>
+        <div><div class="title" style="color:#a78bfa;">Exp. Valve</div><div class="desc">팽창밸브</div></div>
+      </div>
+      <div class="palette-help">
+        <b>조작 단축키</b><br>• <b>R 키</b> → 심볼 90° 회전<br>• 빈 공간 드래그 → 다중 선택<br>• <b>Shift + 클릭</b> → 중복 선택<br>• <span style="color:#f97316;">● OUT</span> → <span style="color:#38bdf8;">● IN</span> 연결
+      </div>
+    </div>
+
+    <div class="center-col">
+      <div class="canvas-wrap" id="canvasWrap">
+        <svg id="wireSvg"></svg>
+        <div id="labelLayer"></div>
+        <div id="nodeLayer"></div>
+        <div id="selectBox"></div>
+      </div>
+      <div class="plotter">
+        <div class="plotter-bar">
+          <strong style="color:var(--accent);">📈 결과 플랏터</strong>
+          <select id="plotMode">
+            <option value="ph">P-h 선도 (몰리에르 선도)</option>
+            <option value="sweep">파라미터 스윕</option>
+            <option value="profile">사이클 구간별 상태</option>
+          </select>
+          <select id="sweepX">
+            <option value="rpm">X축: 압축기 RPM (1500~5500)</option>
+            <option value="p2">X축: 토출압 P2 (8~20 bar)</option>
+          </select>
+          <select id="plotY"></select>
+          <button class="green" id="exportCsvBtn" style="margin-left:auto;">📥 CSV 추출</button>
+        </div>
+        <div class="plotter-canvas-wrap"><canvas id="plotCanvas"></canvas></div>
+      </div>
+    </div>
+
+    <div class="inspector" id="inspector">
+      <h2>속성 편집기</h2>
+      <div style="font-size:12px; color:var(--muted); margin-top:20px; text-align:center;">심볼을 클릭해 주세요.</div>
+    </div>
+  </div>
+</div>
+
+<!-- [페이지 2] 압축기 단품 -->
+<div id="page-comp" class="page">
+  <div class="single-layout">
+    <div>
+      <div class="card">
+        <h2>압축기 모델 라이브러리</h2>
+        <div class="model-row"><select id="scModelSel"></select><button id="scModelDel" class="danger">삭제</button></div>
+        <div class="model-row"><input type="text" id="scModelName" placeholder="모델명 입력" /><button id="scModelSave" class="primary">저장</button></div>
+      </div>
+      <div class="card">
+        <h2>운전 조건</h2>
+        <div class="field"><div class="field-row"><label>입구 압력 P1 [bar]</label><input type="number" id="scP1" value="3.5" step="0.1"></div></div>
+        <div class="field"><div class="field-row"><label>출구 압력 P2 [bar]</label><input type="number" id="scP2" value="12.0" step="0.2"></div></div>
+        <div class="field"><div class="field-row"><label>입구 온도 T1 [°C]</label><input type="number" id="scT1" value="15.0" step="0.5"></div></div>
+        <div class="field"><div class="field-row"><label>회전수 [RPM]</label><input type="number" id="scRpm" value="3000" step="100"></div></div>
+        <div class="field"><div class="field-row"><label>배기량 Vd [cc/rev]</label><input type="number" id="scVd" value="120" step="5"></div></div>
+      </div>
+      <div class="card">
+        <h2>효율 CSV (PR, RPM, eff)</h2>
+        <div class="sub-tabs" id="scCsvTabs"><button class="sub-btn active" data-t="is">η_is</button><button class="sub-btn" data-t="vol">η_v</button><button class="sub-btn" data-t="mech">η_m</button></div>
+        <textarea id="scCsvText"></textarea>
+        <button class="primary" id="scApplyCsv" style="margin-top:6px; width:100%;">CSV 적용</button>
+      </div>
+    </div>
+    <div>
+      <div class="kpi-grid" id="scKpis"></div>
+      <div class="card"><h2>압축기 상세 결과</h2><div id="scDetail" style="font-size:13px; line-height:1.9;"></div></div>
+    </div>
+  </div>
+</div>
+
+<!-- [페이지 3] 열교환기 단품 -->
+<div id="page-hx" class="page">
+  <div class="single-layout">
+    <div>
+      <div class="card">
+        <h2>열교환기 모델 라이브러리</h2>
+        <div class="model-row"><select id="shModelSel"></select><button id="shModelDel" class="danger">삭제</button></div>
+        <div class="model-row"><input type="text" id="shModelName" placeholder="모델명 입력" /><button id="shModelSave" class="primary">저장</button></div>
+      </div>
+      <div class="card">
+        <h2>냉매 입구 &amp; 모델링 방식</h2>
+        <div class="field"><select id="shMethod" class="full"><option value="UA">1. UA 직접 입력법</option><option value="NTU">2. NTU 직접 입력법</option><option value="CORR">3. 상관식 기반 (Nu = C·Re^m·Pr^n)</option></select></div>
+        <div class="field"><div class="field-row"><label>냉매 입구압 [bar]</label><input type="number" id="shPin" value="12.0" step="0.2"></div></div>
+        <div class="field"><div class="field-row"><label>냉매 입구온도 [°C]</label><input type="number" id="shTin" value="75.0" step="1.0"></div></div>
+        <div class="field"><div class="field-row"><label>냉매 유량 [kg/s]</label><input type="number" id="shMdot" value="0.085" step="0.005"></div></div>
+        <div class="field"><div class="field-row"><label>외기 온도 T_air [°C]</label><input type="number" id="shTair" value="30.0" step="0.5"></div></div>
+        <div class="field"><div class="field-row"><label>공기 유량 [kg/s]</label><input type="number" id="shMair" value="1.5" step="0.1"></div></div>
+        <div class="field"><div class="field-row"><label>압력강하 ΔP [bar]</label><input type="number" id="shDP" value="0.3" step="0.05"></div></div>
+        <div id="shMethodFields"></div>
+      </div>
+    </div>
+    <div>
+      <div class="kpi-grid" id="shKpis"></div>
+      <div class="card"><h2>열교환기 상세 결과</h2><div id="shDetail" style="font-size:13px; line-height:1.9;"></div></div>
+    </div>
+  </div>
+</div>
+
+<!-- [페이지 4] 냉매 물성치 점검 -->
+<div id="page-prop" class="page">
+  <div class="single-layout">
+    <div>
+      <div class="card">
+        <h2>전역 냉매 설정</h2>
+        <div class="field"><select id="globalFluidSel" class="full"></select></div>
+        <div class="field">
+          <div class="field-row"><label>포화 물성치 CSV (T_C, P_sat_bar, h_g_kJkg)</label></div>
+          <textarea id="propCsvText" style="height:175px;"></textarea>
+          <button class="primary" id="applyPropCsvBtn" style="margin-top:6px; width:100%;">CSV 피팅 및 전체 적용</button>
+          <div id="propStatus" style="font-size:11px; color:var(--green); margin-top:6px;"></div>
+        </div>
+      </div>
+      <div class="card">
+        <h2>물성치 검증 계산기</h2>
+        <div class="field"><div class="field-row"><label>테스트 온도 T [°C]</label><input type="number" id="testT" value="40.0" step="1"></div></div>
+        <div class="field"><div class="field-row"><label>테스트 압력 P [bar]</label><input type="number" id="testP" value="3.5" step="0.1"></div></div>
+      </div>
+    </div>
+    <div>
+      <div class="kpi-grid" id="propKpis"></div>
+      <div class="card" style="height:360px; display:flex; flex-direction:column;">
+        <h2>포화압력 피팅 커브</h2>
+        <div style="flex:1; min-height:0;"><canvas id="propCanvas"></canvas></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- [페이지 5] 솔버 점검 & 설명 -->
+<div id="page-solver" class="page">
+  <div class="single-layout">
+    <div>
+      <div class="card">
+        <h2>솔버 파라미터 설정 (solver.js)</h2>
+        <div class="field"><div class="field-row"><label>최대 반복 횟수 (maxIter)</label><input type="number" id="svMaxIter" value="50" min="5" max="200" step="5"></div></div>
+        <div class="field"><div class="field-row"><label>온도 허용오차 tolT [°C]</label><input type="number" id="svTolT" value="0.05" step="0.01"></div></div>
+        <div class="field"><div class="field-row"><label>압력 허용오차 tolP [bar]</label><input type="number" id="svTolP" value="0.02" step="0.01"></div></div>
+        <div class="field"><div class="field-row"><label>완화 계수 α (0.1 ~ 1.0)</label><input type="number" id="svAlpha" value="0.5" min="0.1" max="1.0" step="0.05"></div></div>
+        <button class="primary" id="svRunBtn" style="width:100%; margin-top:6px;">▶ 현재 회로로 솔버 테스트 실행</button>
+        <button class="green" id="svOptAlphaBtn" style="width:100%; margin-top:6px;">⚡ 완화계수(α) 자동 최적화</button>
+        <div class="prog-track"><div class="prog-fill" id="svProgBar"></div></div>
+        <div id="svProgText" style="font-size:12px; color:var(--accent); text-align:center;">대기 중</div>
+      </div>
+
+      <div class="card">
+        <h2>솔버별 상세 설명</h2>
+        <div id="solverDocsArea"></div>
+      </div>
+    </div>
+    <div>
+      <div class="kpi-grid" id="svKpis"></div>
+      <div class="card" style="height:340px; display:flex; flex-direction:column;">
+        <h2>반복 횟수별 잔차 수렴 곡선 (ΔT [K], Δh [kJ/kg])</h2>
+        <div style="flex:1; min-height:0;"><canvas id="solverCanvas"></canvas></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="./compressor.js"></script>
+<script src="./heat_exchanger.js"></script>
+<script src="./expansion_valve.js"></script>
+<script src="./solver.js"></script>
+
+<script>
+const CM = window.CompressorModule, HX = window.HXModule, VM = window.ValveModule, SM = window.SolverModule;
+if (!CM || !HX || !VM || !SM) { document.getElementById("errBanner").style.display = "block"; throw new Error("JS 모듈 로드 실패"); }
+
+let globalFluid = "R134a", globalRefProp = new CM.RefrigerantProp(globalFluid);
+let lastConvergence = null;
+const KEY_COMP = "thermal_comp_models_v2", KEY_HX = "thermal_hx_models_v2", KEY_VALVE = "thermal_valve_models_v2";
+const loadStore = k => { try { return JSON.parse(localStorage.getItem(k) || "{}"); } catch { return {}; } };
+const saveStore = (k, obj) => localStorage.setItem(k, JSON.stringify(obj));
+
+function getSolverOpts() {
+  return {
+    method: document.getElementById("solverSelect").value,
+    maxIter: Math.max(5, +document.getElementById("svMaxIter").value || 50),
+    tolT: Math.max(0.001, +document.getElementById("svTolT").value || 0.05),
+    tolP: Math.max(0.001, +document.getElementById("svTolP").value || 0.02),
+    alpha: Math.min(1.0, Math.max(0.1, +document.getElementById("svAlpha").value || 0.5))
+  };
+}
+
+document.querySelectorAll(".page-btn").forEach(btn => {
+  btn.onclick = () => {
+    document.querySelectorAll(".page-btn").forEach(b => b.classList.remove("active"));
+    document.querySelectorAll(".page").forEach(p => p.classList.remove("active"));
+    btn.classList.add("active");
+    const pg = btn.dataset.page;
+    document.getElementById("page-" + pg).classList.add("active");
+    document.getElementById("canvasToolbarBtns").style.display = pg === "canvas" ? "flex" : "none";
+    if (pg === "canvas") runSimulation();
+    if (pg === "comp") { refreshSingleModelSelects(); runSingleComp(); }
+    if (pg === "hx") { refreshSingleModelSelects(); renderSingleHxMethodFields(); runSingleHx(); }
+    if (pg === "prop") runPropCheck();
+    if (pg === "solver") renderSolverTab();
+  };
+});
+
+// ================= 캔버스 상태 & 회전 포트 =================
+let nodes = [], edges = [], nextId = 1, activeCsvTab = "is", selectedNodeIds = new Set(), lastExportRows = [];
+const canvasWrap = document.getElementById("canvasWrap"), wireSvg = document.getElementById("wireSvg");
+const nodeLayer = document.getElementById("nodeLayer"), labelLayer = document.getElementById("labelLayer");
+const selectBox = document.getElementById("selectBox"), inspector = document.getElementById("inspector");
+const solverSelect = document.getElementById("solverSelect");
+
+function createNodeData(type, x, y, rot = 0) {
+  const id = "n" + (nextId++);
+  if (type === "compressor") return { id, type, x, y, rot, modelName: "기본 압축기", params: { P1_bar: 3.5, P2_bar: 12.0, T1_C: 15.0, rpm: 3000, vd_cc: 120, csv_is: CM.DEFAULT_EFF_CSV.is, csv_vol: CM.DEFAULT_EFF_CSV.vol, csv_mech: CM.DEFAULT_EFF_CSV.mech }, result: null };
+  if (type === "hx") return { id, type, x, y, rot, modelName: "열교환기(HX)", params: { method: "UA", T_air_in: 30.0, m_air_kgs: 1.5, dP_bar: 0.3, UA_kWK: 1.2, NTU_val: 1.0, area_m2: 12.0, Dh_mm: 6.0, h_air_Wm2K: 80, corr_C: 0.023, corr_m: 0.8, corr_n: 0.4 }, result: null };
+  return { id, type: "valve", x, y, rot, modelName: "팽창밸브(EEV)", params: { P_out_bar: 3.6 }, result: null };
+}
+
+function getPortLocal(rot, isOut) {
+  const r = ((rot || 0) % 360 + 360) % 360;
+  if (r === 0)   return isOut ? { x: 100, y: 50, dx: 1, dy: 0 }  : { x: 0, y: 50, dx: -1, dy: 0 };
+  if (r === 90)  return isOut ? { x: 50, y: 100, dx: 0, dy: 1 }  : { x: 50, y: 0, dx: 0, dy: -1 };
+  if (r === 180) return isOut ? { x: 0, y: 50, dx: -1, dy: 0 }   : { x: 100, y: 50, dx: 1, dy: 0 };
+  return                isOut ? { x: 50, y: 0, dx: 0, dy: -1 }   : { x: 50, y: 100, dx: 0, dy: 1 };
+}
+
+function getSymbolSVG(n) {
+  if (n.type === "compressor") {
+    const dur = Math.max(0.35, 6000 / Math.max(n.params.rpm || 1000, 300)).toFixed(2);
+    return `<svg width="100" height="100" viewBox="0 0 100 100"><line x1="0" y1="50" x2="14" y2="50" stroke="#38bdf8" stroke-width="5"/><line x1="86" y1="50" x2="100" y2="50" stroke="#f97316" stroke-width="5"/><polygon points="14,18 86,30 86,70 14,82" fill="#1e293b" stroke="#f97316" stroke-width="2.5"/><g class="spin-impeller" style="animation-duration:${dur}s"><circle cx="50" cy="50" r="13" fill="none" stroke="#f97316" stroke-width="1.8"/><line x1="50" y1="37" x2="50" y2="63" stroke="#fb923c" stroke-width="2.5"/><line x1="37" y1="50" x2="63" y2="50" stroke="#fb923c" stroke-width="2.5"/></g></svg>`;
+  }
+  if (n.type === "hx") {
+    const isCond = !n.result || n.result.metrics.isCondenser, sc = isCond ? "#22c55e" : "#38bdf8", cc = isCond ? "#38bdf8" : "#7dd3fc";
+    return `<svg width="100" height="100" viewBox="0 0 100 100"><line x1="0" y1="50" x2="14" y2="50" stroke="${isCond?'#f97316':'#38bdf8'}" stroke-width="5"/><line x1="86" y1="50" x2="100" y2="50" stroke="${sc}" stroke-width="5"/><rect x="14" y="24" width="72" height="52" rx="7" fill="#1e293b" stroke="${sc}" stroke-width="2.5"/><polyline points="21,38 31,62 42,38 53,62 64,38 75,62 80,50" fill="none" stroke="${cc}" stroke-width="2.5" stroke-linejoin="round"/></svg>`;
+  }
+  return `<svg width="100" height="100" viewBox="0 0 100 100"><line x1="0" y1="50" x2="22" y2="50" stroke="#22c55e" stroke-width="5"/><line x1="78" y1="50" x2="100" y2="50" stroke="#38bdf8" stroke-width="5"/><polygon points="22,28 50,50 22,72" fill="#1e293b" stroke="#a78bfa" stroke-width="2.5"/><polygon points="78,28 50,50 78,72" fill="#1e293b" stroke="#a78bfa" stroke-width="2.5"/><line x1="50" y1="50" x2="50" y2="22" stroke="#a78bfa" stroke-width="2.5"/><rect x="36" y="16" width="28" height="8" rx="3" fill="#a78bfa"/></svg>`;
+}
+
+// ================= 비동기 진행도 표시 시뮬레이션 실행 =================
+let simRunId = 0;
+async function runSimulation(animateProgress = false) {
+  const myId = ++simRunId;
+  const opts = getSolverOpts();
+  opts.delayMs = animateProgress ? 18 : 0;
+
+  const convBadge = document.getElementById("convBadge");
+  const svBar = document.getElementById("svProgBar");
+  const svTxt = document.getElementById("svProgText");
+
+  const { simNodes, simEdges, convergence } = await SM.solveAsync(nodes, edges, globalFluid, globalRefProp, opts, ({ iter, maxIter, resT, resH }) => {
+    if (myId !== simRunId) return;
+    convBadge.className = "conv-badge running";
+    convBadge.textContent = `진행중: ${iter}/${maxIter}회 (ΔT ${resT.toFixed(2)}K)`;
+    if (svBar) svBar.style.width = `${Math.round((iter / maxIter) * 100)}%`;
+    if (svTxt) svTxt.textContent = `계산 진행중: ${iter} / ${maxIter} 회 (ΔT: ${resT.toFixed(3)}K, Δh: ${resH.toFixed(2)}kJ/kg)`;
+  });
+
+  if (myId !== simRunId) return;
+  nodes.forEach((n, i) => (n.result = simNodes[i].result));
+  edges.forEach((e, i) => (e.stream = simEdges[i].stream));
+  lastConvergence = convergence;
+
+  if (convergence.method === "open_loop") {
+    convBadge.className = "conv-badge";
+    convBadge.textContent = "개회로 (1회 완료)";
+  } else if (convergence.converged) {
+    convBadge.className = "conv-badge ok";
+    convBadge.textContent = `수렴 완료 (${convergence.iterations}/${convergence.maxIter}회)`;
+  } else {
+    convBadge.className = "conv-badge fail";
+    convBadge.textContent = `수렴 실패 (${convergence.iterations}/${convergence.maxIter}회)`;
+  }
+
+  const comp = nodes.find(n => n.type === "compressor" && n.result);
+  const evap = nodes.find(n => n.type === "hx" && n.result && !n.result.metrics.isCondenser);
+  const copBadge = document.getElementById("copBadge");
+  copBadge.textContent = (comp && evap && comp.result.metrics.W_shaft_kW > 0)
+    ? `Qe: ${evap.result.metrics.Q_kW.toFixed(2)} kW | COP: ${(evap.result.metrics.Q_kW / comp.result.metrics.W_shaft_kW).toFixed(2)}`
+    : "COP: -";
+
+  renderNodes(); renderWires(); renderInspector(); drawPlot();
+  if (document.getElementById("page-solver").classList.contains("active")) renderSolverTab();
+}
+
+solverSelect.onchange = () => runSimulation(true);
+document.getElementById("runBtn").onclick = () => runSimulation(true);
+document.getElementById("svRunBtn").onclick = () => runSimulation(true);
+
+document.getElementById("svOptAlphaBtn").onclick = () => {
+  const opts = getSolverOpts();
+  const { best } = SM.optimizeAlpha(nodes, edges, globalFluid, globalRefProp, opts);
+  if (!best) return;
+
+  document.getElementById("svAlpha").value = best.alpha.toFixed(2);
+  const txt = document.getElementById("svProgText");
+  txt.style.color = best.converged ? "#4ade80" : "#fbbf24";
+  txt.textContent = best.converged
+    ? `최적 α = ${best.alpha.toFixed(2)} 적용됨 (${best.iter}회 만에 수렴)`
+    : `최적 후보 α = ${best.alpha.toFixed(2)} (최소 잔차 ΔT: ${best.resT.toFixed(3)}K)`;
+
+  runSimulation(true);
+};
+
+// ================= [페이지 5] 솔버 점검 & 설명 렌더링 =================
+function renderSolverTab() {
+  const docsEl = document.getElementById("solverDocsArea");
+  docsEl.innerHTML = Object.entries(SM.SOLVER_DOCS).map(([k, d]) => `
+    <div class="doc-card" style="${k===solverSelect.value?'border-color:#38bdf8;':''}">
+      <h3>${d.name} ${k===solverSelect.value?'<span style="color:#4ade80;font-size:11px;">(현재 선택)</span>':''}</h3>
+      <div><b>핵심 수식:</b> <code>${d.formula}</code></div>
+      <div><b>장점:</b> ${d.pros}</div>
+      <div><b>단점:</b> ${d.cons}</div>
+      <div style="color:#fbbf24;"><b>Tip:</b> ${d.tip}</div>
+    </div>`).join("");
+
+  const c = lastConvergence;
+  if (!c) return;
+  const bar = document.getElementById("svProgBar"), txt = document.getElementById("svProgText");
+  bar.style.width = `${Math.round((c.iterations / c.maxIter) * 100)}%`;
+  bar.style.background = c.converged ? "#22c55e" : "#ef4444";
+  txt.style.color = c.converged ? "#4ade80" : "#fca5a5";
+  txt.textContent = c.converged ? `수렴 완료 (${c.iterations} / ${c.maxIter} 회)` : `수렴 실패 (${c.iterations} / ${c.maxIter} 회 — 완화계수 최적화를 눌러보세요)`;
+
+  document.getElementById("svKpis").innerHTML = [
+    ["수렴 상태", c.converged ? "수렴 완료" : "수렴 실패", `${c.iterations} / ${c.maxIter} 회`, c.converged ? "#4ade80" : "#ef4444"],
+    ["최종 온도 잔차 ΔT", c.residualT.toFixed(4) + " K", `허용치 ≤ ${getSolverOpts().tolT} K`, "#38bdf8"],
+    ["최종 압력 잔차 ΔP", c.residualP.toFixed(4) + " bar", `허용치 ≤ ${getSolverOpts().tolP} bar`, "#f97316"],
+    ["최종 엔탈피 잔차 Δh", c.residualH.toFixed(3) + " kJ/kg", c.convergedP2 ? `평형 P2: ${c.convergedP2.toFixed(2)} bar` : "1번 ↔ 1'번 일치도", "#a78bfa"]
+  ].map(([l,v,s,col]) => `<div class="kpi"><div class="lbl">${l}</div><div class="val" style="color:${col}">${v}</div><div class="sub">${s}</div></div>`).join("");
+
+  const cvs = document.getElementById("solverCanvas"), rect = cvs.getBoundingClientRect();
+  if (rect.width < 50 || rect.height < 50) return;
+  const dpr = window.devicePixelRatio || 1, W = Math.floor(rect.width), H = Math.floor(rect.height);
+  cvs.width = Math.floor(W * dpr); cvs.height = Math.floor(H * dpr);
+  const ctx = cvs.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H);
+
+  if (!c.history || c.history.length < 1) {
+    ctx.fillStyle = "#64748b"; ctx.font = "12px sans-serif";
+    ctx.fillText("개회로 모드이거나 반복 이력이 없습니다. 폐회로 솔버를 선택해 실행하세요.", 20, H / 2);
+    return;
+  }
+
+  const padL = 52, padR = 24, padT = 22, padB = 32, pW = W - padL - padR, pH = H - padT - padB;
+  const maxVal = Math.max(0.1, ...c.history.map(h => Math.max(h.resT, h.resH)));
+  const xOf = i => padL + (c.history.length === 1 ? pW / 2 : (pW * i) / (c.history.length - 1));
+  const yOf = v => (H - padB) - (v / (maxVal * 1.1)) * pH;
+
+  ctx.strokeStyle = "#1e293b"; ctx.fillStyle = "#64748b"; ctx.font = "10.5px sans-serif";
+  for (let i = 0; i <= 4; i++) {
+    const gy = padT + (pH * i) / 4;
+    ctx.beginPath(); ctx.moveTo(padL, gy); ctx.lineTo(W - padR, gy); ctx.stroke();
+    ctx.fillText(((maxVal * 1.1) * (4 - i) / 4).toFixed(2), 6, gy + 4);
+  }
+  ctx.strokeStyle = "#475569"; ctx.beginPath(); ctx.moveTo(padL, padT); ctx.lineTo(padL, H - padB); ctx.lineTo(W - padR, H - padB); ctx.stroke();
+
+  [["resT", "#38bdf8"], ["resH", "#a78bfa"]].forEach(([key, col]) => {
+    ctx.strokeStyle = col; ctx.lineWidth = 2.2; ctx.beginPath();
+    c.history.forEach((h, i) => i === 0 ? ctx.moveTo(xOf(i), yOf(h[key])) : ctx.lineTo(xOf(i), yOf(h[key])));
+    ctx.stroke();
+    c.history.forEach((h, i) => { ctx.fillStyle = col; ctx.beginPath(); ctx.arc(xOf(i), yOf(h[key]), 3.5, 0, Math.PI * 2); ctx.fill(); });
+  });
+  ctx.fillStyle = "#38bdf8"; ctx.fillText("● ΔT [K]", padL + 8, 15);
+  ctx.fillStyle = "#a78bfa"; ctx.fillText("● Δh [kJ/kg]", padL + 75, 15);
+  ctx.fillStyle = "#94a3b8"; ctx.fillText("Iteration (회)", W - 80, H - 6);
+}
+
+// ================= 노드/배관 렌더링 & 인터랙션 =================
+let dragMode = null, dragStart = { x: 0, y: 0 }, initialNodePos = new Map(), connectingFrom = null, tempWireEl = null;
+
+function renderNodes() {
+  nodeLayer.innerHTML = "";
+  nodes.forEach(n => {
+    const el = document.createElement("div");
+    el.className = "node" + (selectedNodeIds.has(n.id) ? " selected" : "");
+    el.style.left = n.x + "px"; el.style.top = n.y + "px"; el.dataset.id = n.id;
+
+    let cap = `<b>${n.modelName}</b>`;
+    if (n.result) {
+      if (n.type === "compressor") cap = `<b style="color:#f97316">${n.modelName}</b><br>T2:<b>${n.result.outlet.T_C.toFixed(1)}°C</b> | W:${n.result.metrics.W_shaft_kW.toFixed(2)}kW`;
+      else if (n.type === "hx") { const c = n.result.metrics.isCondenser ? "#22c55e" : "#38bdf8"; cap = `<b style="color:${c}">${n.modelName} (${n.result.metrics.isCondenser?'응축':'증발'})</b><br>T_out:<b>${n.result.outlet.T_C.toFixed(1)}°C</b> | Q:${n.result.metrics.Q_kW.toFixed(2)}kW`; }
+      else if (n.type === "valve") cap = `<b style="color:#a78bfa">${n.modelName}</b><br>T4:<b>${n.result.outlet.T_C.toFixed(1)}°C</b> | x:${n.result.metrics.quality.toFixed(2)}`;
+    }
+    const pIn = getPortLocal(n.rot, false), pOut = getPortLocal(n.rot, true);
+    el.innerHTML = `<button class="node-del">×</button><div class="node-svg-wrap" style="transform:rotate(${n.rot||0}deg)">${getSymbolSVG(n)}</div><div class="node-caption">${cap}</div><div class="port port-in" style="left:${pIn.x}px;top:${pIn.y}px;"></div><div class="port port-out" style="left:${pOut.x}px;top:${pOut.y}px;"></div>`;
+
+    el.addEventListener("mousedown", e => {
+      e.stopPropagation();
+      if (e.target.classList.contains("node-del")) { nodes = nodes.filter(x => x.id !== n.id); edges = edges.filter(x => x.from !== n.id && x.to !== n.id); selectedNodeIds.delete(n.id); runSimulation(); return; }
+      if (e.target.classList.contains("port")) return;
+      if (e.shiftKey) { selectedNodeIds.has(n.id) ? selectedNodeIds.delete(n.id) : selectedNodeIds.add(n.id); }
+      else if (!selectedNodeIds.has(n.id)) { selectedNodeIds.clear(); selectedNodeIds.add(n.id); }
+      document.querySelectorAll(".node").forEach(nd => nd.classList.toggle("selected", selectedNodeIds.has(nd.dataset.id)));
+      renderInspector();
+      dragMode = "nodes"; const rect = canvasWrap.getBoundingClientRect();
+      dragStart = { x: e.clientX - rect.left, y: e.clientY - rect.top }; initialNodePos.clear();
+      nodes.forEach(nd => { if (selectedNodeIds.has(nd.id)) initialNodePos.set(nd.id, { x: nd.x, y: nd.y }); });
+    });
+    el.querySelector(".port-out").addEventListener("mousedown", e => { e.stopPropagation(); dragMode = "wire"; connectingFrom = n.id; tempWireEl = document.createElementNS("http://www.w3.org/2000/svg", "path"); tempWireEl.setAttribute("class", "temp-wire"); wireSvg.appendChild(tempWireEl); });
+    el.querySelector(".port-in").addEventListener("mouseup", e => { e.stopPropagation(); if (dragMode === "wire" && connectingFrom && connectingFrom !== n.id) { edges = edges.filter(ed => ed.to !== n.id); edges.push({ id: "e" + (nextId++), from: connectingFrom, to: n.id, stream: null }); cleanupTempWire(); runSimulation(); } });
+    nodeLayer.appendChild(el);
+  });
+}
+
+window.addEventListener("keydown", e => {
+  if (e.key.toLowerCase() === "r" && document.activeElement.tagName !== "INPUT" && document.activeElement.tagName !== "TEXTAREA" && selectedNodeIds.size > 0) {
+    nodes.forEach(n => { if (selectedNodeIds.has(n.id)) n.rot = ((n.rot || 0) + 90) % 360; }); renderNodes(); renderWires();
+  }
+});
+
+canvasWrap.addEventListener("mousedown", e => {
+  if (e.target !== canvasWrap && e.target !== wireSvg) return;
+  if (!e.shiftKey) selectedNodeIds.clear();
+  dragMode = "marquee"; const rect = canvasWrap.getBoundingClientRect();
+  dragStart = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+  selectBox.style.left = dragStart.x + "px"; selectBox.style.top = dragStart.y + "px"; selectBox.style.width = "0px"; selectBox.style.height = "0px"; selectBox.style.display = "block";
+  document.querySelectorAll(".node").forEach(nd => nd.classList.toggle("selected", selectedNodeIds.has(nd.dataset.id))); renderInspector();
+});
+
+function getPortGlobal(nodeId, isOut) { const n = nodes.find(x => x.id === nodeId); if (!n) return { x: 0, y: 0, dx: 1, dy: 0 }; const p = getPortLocal(n.rot, isOut); return { x: n.x + p.x, y: n.y + p.y, dx: p.dx, dy: p.dy }; }
+function bezierDirectional(p1, p2) { const d = Math.max(35, Math.min(110, Math.hypot(p2.x - p1.x, p2.y - p1.y) * 0.4)); return `M ${p1.x} ${p1.y} C ${p1.x + p1.dx * d} ${p1.y + p1.dy * d}, ${p2.x + p2.dx * d} ${p2.y + p2.dy * d}, ${p2.x} ${p2.y}`; }
+
+function renderWires() {
+  wireSvg.innerHTML = ""; labelLayer.innerHTML = "";
+  edges.forEach(edge => {
+    const p1 = getPortGlobal(edge.from, true), p2 = getPortGlobal(edge.to, false);
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", bezierDirectional(p1, p2)); path.setAttribute("class", "pipe-path");
+    const col = !edge.stream ? "#64748b" : (edge.stream.T_C > 55 ? "#f97316" : (edge.stream.T_C > 20 ? "#22c55e" : "#38bdf8"));
+    path.setAttribute("stroke", col); path.onclick = () => { edges = edges.filter(e => e.id !== edge.id); runSimulation(); };
+    wireSvg.appendChild(path);
+    if (edge.stream) {
+      const lbl = document.createElement("div"); lbl.className = "pipe-label";
+      lbl.style.left = ((p1.x + p2.x) / 2) + "px"; lbl.style.top = ((p1.y + p2.y) / 2) + "px"; lbl.style.borderColor = col;
+      lbl.innerHTML = `<b>${edge.stream.P_bar.toFixed(1)} bar</b> | <b>${edge.stream.T_C.toFixed(1)}°C</b>`; labelLayer.appendChild(lbl);
+    }
+  });
+}
+
+function cleanupTempWire() { if (tempWireEl) { tempWireEl.remove(); tempWireEl = null; } connectingFrom = null; }
+window.addEventListener("mousemove", e => {
+  if (!dragMode) return; const rect = canvasWrap.getBoundingClientRect(), mx = e.clientX - rect.left, my = e.clientY - rect.top;
+  if (dragMode === "nodes") {
+    const dx = mx - dragStart.x, dy = my - dragStart.y;
+    nodes.forEach(n => { if (initialNodePos.has(n.id)) { const init = initialNodePos.get(n.id); n.x = Math.max(8, init.x + dx); n.y = Math.max(8, init.y + dy); const el = nodeLayer.querySelector(`.node[data-id="${n.id}"]`); if (el) { el.style.left = n.x + "px"; el.style.top = n.y + "px"; } } });
+    renderWires();
+  } else if (dragMode === "marquee") {
+    selectBox.style.left = Math.min(dragStart.x, mx) + "px"; selectBox.style.top = Math.min(dragStart.y, my) + "px";
+    selectBox.style.width = Math.abs(mx - dragStart.x) + "px"; selectBox.style.height = Math.abs(my - dragStart.y) + "px";
+  } else if (dragMode === "wire" && tempWireEl) { const p1 = getPortGlobal(connectingFrom, true); tempWireEl.setAttribute("d", bezierDirectional(p1, { x: mx, y: my, dx: -p1.dx, dy: -p1.dy })); }
+});
+window.addEventListener("mouseup", () => {
+  if (dragMode === "marquee") {
+    const bx = parseFloat(selectBox.style.left), by = parseFloat(selectBox.style.top), bw = parseFloat(selectBox.style.width), bh = parseFloat(selectBox.style.height);
+    if (bw > 4 || bh > 4) nodes.forEach(n => { if (n.x + 50 >= bx && n.x + 50 <= bx + bw && n.y + 50 >= by && n.y + 50 <= by + bh) selectedNodeIds.add(n.id); });
+    selectBox.style.display = "none"; document.querySelectorAll(".node").forEach(nd => nd.classList.toggle("selected", selectedNodeIds.has(nd.dataset.id))); renderInspector();
+  }
+  cleanupTempWire(); dragMode = null;
+});
+
+// ================= 속성창 & 플랏터 (P-h 선도 포함) =================
+function hxMethodFieldsHTML(p, prefix) {
+  if (p.method === "NTU") return `<div class="field"><div class="field-row"><label>NTU 값</label><input type="number" id="${prefix}NTU" value="${p.NTU_val}" step="0.1"></div></div>`;
+  if (p.method === "CORR") return `<div class="field"><div class="field-row"><label>전열면적 A [m²]</label><input type="number" id="${prefix}Area" value="${p.area_m2}" step="0.5"></div></div><div class="field"><div class="field-row"><label>수력직경 Dh [mm]</label><input type="number" id="${prefix}Dh" value="${p.Dh_mm}" step="0.5"></div></div><div class="field"><div class="field-row"><label>공기측 h_air [W/m²K]</label><input type="number" id="${prefix}Hair" value="${p.h_air_Wm2K}" step="5"></div></div><div class="field"><div class="field-row"><label>상관식 C</label><input type="number" id="${prefix}C" value="${p.corr_C}" step="0.002"></div></div><div class="field"><div class="field-row"><label>m / n</label><div style="display:flex;gap:4px;"><input type="number" id="${prefix}M" value="${p.corr_m}" step="0.05" style="width:52px;"><input type="number" id="${prefix}N" value="${p.corr_n}" step="0.05" style="width:52px;"></div></div></div>`;
+  return `<div class="field"><div class="field-row"><label>열교환 성능 UA [kW/K]</label><input type="number" id="${prefix}UA" value="${p.UA_kWK}" step="0.05"></div></div>`;
+}
+
+function renderInspector() {
+  if (selectedNodeIds.size === 0) { inspector.innerHTML = `<h2>속성 편집기</h2><div style="font-size:12px;color:var(--muted);margin-top:20px;text-align:center;">심볼을 클릭해 주세요.</div>`; return; }
+  if (selectedNodeIds.size > 1) { inspector.innerHTML = `<h2>다중 선택 (${selectedNodeIds.size}개)</h2><button class="primary" id="rotMultiBtn" style="width:100%;margin-top:8px;">↻ 선택 심볼 모두 90° 회전</button>`; document.getElementById("rotMultiBtn").onclick = () => { nodes.forEach(n => { if (selectedNodeIds.has(n.id)) n.rot = ((n.rot||0)+90)%360; }); renderNodes(); renderWires(); }; return; }
+  const n = nodes.find(x => x.id === [...selectedNodeIds][0]); if (!n) return;
+  const rotBtn = `<button id="rotBtn" style="padding:3px 7px;font-size:11px;">↻ 90° 회전</button>`;
+
+  if (n.type === "compressor") {
+    const opts = `<option value="">-- 압축기 모델 --</option>` + Object.keys(loadStore(KEY_COMP)).map(k => `<option value="${k}" ${k===n.modelName?"selected":""}>${k}</option>`).join("");
+    const csvKey = "csv_" + activeCsvTab;
+    inspector.innerHTML = `<h2><span>Compressor</span>${rotBtn}</h2><div class="model-box"><div class="model-row"><select id="insMSel">${opts}</select></div><div class="model-row"><input type="text" id="insMName" value="${n.modelName}"/><button id="insMSave" class="primary">저장</button></div></div><div class="field"><div class="field-row"><label>초기 입구압 P1 [bar]</label><input type="number" id="insP1" value="${n.params.P1_bar}" step="0.1"></div></div><div class="field"><div class="field-row"><label>출구압 P2 [bar]</label><input type="number" id="insP2" value="${n.params.P2_bar}" step="0.2"></div></div><div class="field"><div class="field-row"><label>초기 입구온도 T1 [°C]</label><input type="number" id="insT1" value="${n.params.T1_C}" step="0.5"></div></div><div class="field"><div class="field-row"><label>회전수 [RPM]</label><input type="number" id="insRpm" value="${n.params.rpm}" step="100"></div></div><div class="field"><div class="field-row"><label>배기량 Vd [cc/rev]</label><input type="number" id="insVd" value="${n.params.vd_cc}" step="5"></div></div><div class="sub-tabs"><button class="sub-btn ${activeCsvTab==='is'?'active':''}" data-ct="is">η_is</button><button class="sub-btn ${activeCsvTab==='vol'?'active':''}" data-ct="vol">η_v</button><button class="sub-btn ${activeCsvTab==='mech'?'active':''}" data-ct="mech">η_m</button></div><textarea id="insCsv">${n.params[csvKey]}</textarea><button class="primary" id="insApplyCsv" style="margin-top:4px;width:100%;">CSV 적용</button>${n.result ? `<div class="res-box"><h3>결과</h3>입구: <b>${n.result.inlet.P_bar.toFixed(2)} bar / ${n.result.inlet.T_C.toFixed(1)}°C</b><br>출구 P2: <b>${n.result.outlet.P_bar.toFixed(2)} bar</b> | T2: <b>${n.result.outlet.T_C.toFixed(1)}°C</b><br>축동력 W: <b style="color:#f59e0b">${n.result.metrics.W_shaft_kW.toFixed(2)} kW</b></div>` : ""}`;
+    document.getElementById("insMSel").onchange = e => { const m = loadStore(KEY_COMP)[e.target.value]; if (m) { n.modelName = e.target.value; n.params = { ...n.params, ...m }; runSimulation(); } };
+    document.getElementById("insMSave").onclick = () => { const nm = document.getElementById("insMName").value.trim(); if (!nm) return; const st = loadStore(KEY_COMP); st[nm] = { ...n.params }; saveStore(KEY_COMP, st); n.modelName = nm; runSimulation(); };
+    ["insP1:P1_bar","insP2:P2_bar","insT1:T1_C","insRpm:rpm","insVd:vd_cc"].forEach(s => { const [id, k] = s.split(":"); document.getElementById(id).oninput = e => { n.params[k] = +e.target.value; runSimulation(); }; });
+    inspector.querySelectorAll(".sub-btn").forEach(b => b.onclick = () => { activeCsvTab = b.dataset.ct; renderInspector(); });
+    document.getElementById("insApplyCsv").onclick = () => { n.params[csvKey] = document.getElementById("insCsv").value; runSimulation(); };
+  } else if (n.type === "hx") {
+    const opts = `<option value="">-- 열교환기 모델 --</option>` + Object.keys(loadStore(KEY_HX)).map(k => `<option value="${k}" ${k===n.modelName?"selected":""}>${k}</option>`).join("");
+    inspector.innerHTML = `<h2><span>Heat Exchanger</span>${rotBtn}</h2><div class="model-box"><div class="model-row"><select id="insMSel">${opts}</select></div><div class="model-row"><input type="text" id="insMName" value="${n.modelName}"/><button id="insMSave" class="primary">저장</button></div></div><div class="field"><select id="insMethod" class="full"><option value="UA" ${n.params.method==='UA'?'selected':''}>1. UA 직접 입력법</option><option value="NTU" ${n.params.method==='NTU'?'selected':''}>2. NTU 직접 입력법</option><option value="CORR" ${n.params.method==='CORR'?'selected':''}>3. 상관식 기반</option></select></div><div class="field"><div class="field-row"><label>외기 온도 [°C]</label><input type="number" id="insTair" value="${n.params.T_air_in}" step="0.5"></div></div><div class="field"><div class="field-row"><label>공기 유량 [kg/s]</label><input type="number" id="insMair" value="${n.params.m_air_kgs}" step="0.1"></div></div><div class="field"><div class="field-row"><label>압력강하 ΔP [bar]</label><input type="number" id="insDP" value="${n.params.dP_bar}" step="0.05"></div></div>${hxMethodFieldsHTML(n.params, "ins")}${n.result ? `<div class="res-box"><h3>결과 (${n.result.metrics.role})</h3>Q: <b style="color:#38bdf8">${n.result.metrics.Q_kW.toFixed(2)} kW</b><br>출구: <b>${n.result.outlet.T_C.toFixed(1)}°C</b> (${n.result.metrics.phase})</div>` : ""}`;
+    document.getElementById("insMSel").onchange = e => { const m = loadStore(KEY_HX)[e.target.value]; if (m) { n.modelName = e.target.value; n.params = { ...n.params, ...m }; runSimulation(); } };
+    document.getElementById("insMSave").onclick = () => { const nm = document.getElementById("insMName").value.trim(); if (!nm) return; const st = loadStore(KEY_HX); st[nm] = { ...n.params }; saveStore(KEY_HX, st); n.modelName = nm; runSimulation(); };
+    document.getElementById("insMethod").onchange = e => { n.params.method = e.target.value; runSimulation(); };
+    ["insTair:T_air_in","insMair:m_air_kgs","insDP:dP_bar","insUA:UA_kWK","insNTU:NTU_val","insArea:area_m2","insDh:Dh_mm","insHair:h_air_Wm2K","insC:corr_C","insM:corr_m","insN:corr_n"].forEach(s => { const [id, k] = s.split(":"); const el = document.getElementById(id); if (el) el.oninput = e => { n.params[k] = +e.target.value; runSimulation(); }; });
+  } else {
+    const opts = `<option value="">-- 팽창밸브 모델 --</option>` + Object.keys(loadStore(KEY_VALVE)).map(k => `<option value="${k}" ${k===n.modelName?"selected":""}>${k}</option>`).join("");
+    inspector.innerHTML = `<h2><span>Exp. Valve</span>${rotBtn}</h2><div class="model-box"><div class="model-row"><select id="insMSel">${opts}</select></div><div class="model-row"><input type="text" id="insMName" value="${n.modelName}"/><button id="insMSave" class="primary">저장</button></div></div><div class="field"><div class="field-row"><label>출구 압력 P_out [bar]</label><input type="number" id="insP4" value="${n.params.P_out_bar}" step="0.1"></div></div>${n.result ? `<div class="res-box"><h3>결과</h3>출구 온도: <b>${n.result.outlet.T_C.toFixed(1)}°C</b> | 건도: <b>${n.result.metrics.quality.toFixed(3)}</b></div>` : ""}`;
+    document.getElementById("insMSel").onchange = e => { const m = loadStore(KEY_VALVE)[e.target.value]; if (m) { n.modelName = e.target.value; n.params = { ...n.params, ...m }; runSimulation(); } };
+    document.getElementById("insMSave").onclick = () => { const nm = document.getElementById("insMName").value.trim(); if (!nm) return; const st = loadStore(KEY_VALVE); st[nm] = { ...n.params }; saveStore(KEY_VALVE, st); n.modelName = nm; runSimulation(); };
+    document.getElementById("insP4").oninput = e => { n.params.P_out_bar = +e.target.value || 1; runSimulation(); };
+  }
+  document.getElementById("rotBtn").onclick = () => { n.rot = ((n.rot || 0) + 90) % 360; renderNodes(); renderWires(); };
+}
+
+// ================= 플랏터 =================
+const PROFILE_VARS = [{ key: "T_C", label: "온도 T [°C]" }, { key: "P_bar", label: "압력 P [bar]" }, { key: "h_kJkg", label: "엔탈피 h [kJ/kg]" }];
+const SWEEP_VARS = [{ key: "COP", label: "시스템 COP" }, { key: "Q_evap", label: "냉동능력 Q_evap [kW]" }, { key: "W_shaft", label: "압축기 축동력 [kW]" }, { key: "T2_C", label: "토출온도 T2 [°C]" }];
+const plotModeEl = document.getElementById("plotMode"), sweepXEl = document.getElementById("sweepX"), plotYEl = document.getElementById("plotY");
+
+function syncPlotOptions() {
+  const mode = plotModeEl.value;
+  sweepXEl.style.display = mode === "sweep" ? "inline-block" : "none";
+  plotYEl.style.display = mode === "ph" ? "none" : "inline-block";
+  if (mode !== "ph") plotYEl.innerHTML = (mode === "sweep" ? SWEEP_VARS : PROFILE_VARS).map(v => `<option value="${v.key}">${v.label}</option>`).join("");
+  drawPlot();
+}
+plotModeEl.onchange = syncPlotOptions; sweepXEl.onchange = drawPlot; plotYEl.onchange = drawPlot;
+
+function drawPlot() {
+  const cvs = document.getElementById("plotCanvas"), rect = cvs.getBoundingClientRect();
+  if (rect.width < 50 || rect.height < 50) return;
+  const dpr = window.devicePixelRatio || 1, W = Math.floor(rect.width), H = Math.floor(rect.height);
+  if (cvs.width !== Math.floor(W * dpr) || cvs.height !== Math.floor(H * dpr)) { cvs.width = Math.floor(W * dpr); cvs.height = Math.floor(H * dpr); }
+  const ctx = cvs.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H);
+  const padL = 56, padR = 28, padT = 22, padB = 32, pW = W - padL - padR, pH = H - padT - padB;
+  lastExportRows = [];
+
+  if (plotModeEl.value === "ph") {
+    const f = globalRefProp.getConst(), domePts = [];
+    for (let t = -25; t <= 65; t += 2) { const p = globalRefProp.pSatBar(t), hg = globalRefProp.hgKJ(t); domePts.push({ t, p, hf: hg - f.h_fg, hg }); }
+    const comp = nodes.find(n => n.type === "compressor" && n.result);
+    const cond = nodes.find(n => n.type === "hx" && n.result && n.result.metrics.isCondenser);
+    const valv = nodes.find(n => n.type === "valve" && n.result);
+    const evap = nodes.find(n => n.type === "hx" && n.result && !n.result.metrics.isCondenser);
+
+    const cyclePts = [];
+    if (comp) {
+      cyclePts.push({ tag: "1", name: "1.흡입", h: comp.result.inlet.h_kJkg, p: comp.result.inlet.P_bar, t: comp.result.inlet.T_C, col: "#38bdf8" });
+      cyclePts.push({ tag: "2", name: "2.압축출구", h: comp.result.outlet.h_kJkg, p: comp.result.outlet.P_bar, t: comp.result.outlet.T_C, col: "#f97316" });
+    }
+    if (cond) cyclePts.push({ tag: "3", name: "3.응축출구", h: cond.result.outlet.h_kJkg, p: cond.result.outlet.P_bar, t: cond.result.outlet.T_C, col: "#22c55e" });
+    if (valv) cyclePts.push({ tag: "4", name: "4.팽창출구", h: valv.result.outlet.h_kJkg, p: valv.result.outlet.P_bar, t: valv.result.outlet.T_C, col: "#a78bfa" });
+    if (evap) cyclePts.push({ tag: "1'", name: "1'.증발출구", h: evap.result.outlet.h_kJkg, p: evap.result.outlet.P_bar, t: evap.result.outlet.T_C, col: "#7dd3fc" });
+    cyclePts.forEach(pt => lastExportRows.push({ State: pt.name, h_kJkg: pt.h.toFixed(2), P_bar: pt.p.toFixed(3), T_C: pt.t.toFixed(2) }));
+
+    const allH = [...domePts.map(d => d.hf), ...domePts.map(d => d.hg), ...cyclePts.map(c => c.h)];
+    const allP = [...domePts.map(d => d.p), ...cyclePts.map(c => c.p)];
+    const minH = Math.min(...allH) - 20, maxH = Math.max(...allH) + 25;
+    const minLogP = Math.log10(Math.max(0.5, Math.min(...allP) * 0.8)), maxLogP = Math.log10(Math.max(...allP) * 1.25);
+    const xOf = h => padL + ((h - minH) / (maxH - minH)) * pW, yOf = p => (H - padB) - ((Math.log10(Math.max(0.1, p)) - minLogP) / (maxLogP - minLogP)) * pH;
+
+    ctx.strokeStyle = "#1e293b"; ctx.fillStyle = "#64748b"; ctx.font = "10px sans-serif";
+    [1, 2, 5, 10, 20, 40].forEach(pt => { const lp = Math.log10(pt); if (lp >= minLogP && lp <= maxLogP) { const gy = yOf(pt); ctx.beginPath(); ctx.moveTo(padL, gy); ctx.lineTo(W - padR, gy); ctx.stroke(); ctx.fillText(pt + " bar", 6, gy + 3); } });
+    for (let i = 0; i <= 5; i++) { const hv = minH + (maxH - minH) * i / 5, gx = xOf(hv); ctx.beginPath(); ctx.moveTo(gx, padT); ctx.lineTo(gx, H - padB); ctx.stroke(); ctx.fillText(Math.round(hv), gx - 12, H - padB + 15); }
+    ctx.strokeStyle = "#475569"; ctx.beginPath(); ctx.moveTo(padL, padT); ctx.lineTo(padL, H - padB); ctx.lineTo(W - padR, H - padB); ctx.stroke();
+
+    ctx.setLineDash([4, 3]); ctx.lineWidth = 1.8;
+    ctx.strokeStyle = "#38bdf888"; ctx.beginPath(); domePts.forEach((d, i) => i === 0 ? ctx.moveTo(xOf(d.hf), yOf(d.p)) : ctx.lineTo(xOf(d.hf), yOf(d.p))); ctx.stroke();
+    ctx.strokeStyle = "#f9731688"; ctx.beginPath(); domePts.forEach((d, i) => i === 0 ? ctx.moveTo(xOf(d.hg), yOf(d.p)) : ctx.lineTo(xOf(d.hg), yOf(d.p))); ctx.stroke();
+    ctx.setLineDash([]);
+
+    if (cyclePts.length >= 2) {
+      ctx.strokeStyle = "#facc15"; ctx.lineWidth = 2.5; ctx.beginPath();
+      cyclePts.forEach((pt, i) => i === 0 ? ctx.moveTo(xOf(pt.h), yOf(pt.p)) : ctx.lineTo(xOf(pt.h), yOf(pt.p)));
+      ctx.stroke();
+      cyclePts.forEach(pt => {
+        const cx = xOf(pt.h), cy = yOf(pt.p);
+        ctx.fillStyle = pt.col; ctx.beginPath(); ctx.arc(cx, cy, 5, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = "#f1f5f9"; ctx.font = "bold 11px sans-serif";
+        ctx.fillText(`${pt.tag} (${pt.t.toFixed(0)}°C)`, cx + 7, cy - 4);
+      });
+    }
+    ctx.fillStyle = "#cbd5e1"; ctx.font = "11px sans-serif";
+    ctx.fillText(`P-h 선도 (${globalFluid})`, padL + 6, 14); ctx.fillText("h [kJ/kg]", W - 62, H - 6);
+    return;
+  }
+
+  let labels = [], values = [];
+  if (plotModeEl.value === "profile") {
+    const key = plotYEl.value, comp = nodes.find(n => n.type === "compressor" && n.result);
+    if (comp) {
+      const pts = [{ name: "1.흡입", s: comp.result.inlet }, { name: "2.압축출구", s: comp.result.outlet }];
+      nodes.filter(n => n.type !== "compressor" && n.result).forEach((n, idx) => pts.push({ name: `${idx+3}.${n.modelName}`, s: n.result.outlet }));
+      pts.forEach(p => { labels.push(p.name); values.push(p.s[key]); lastExportRows.push({ State: p.name, P_bar: p.s.P_bar.toFixed(3), T_C: p.s.T_C.toFixed(2), h_kJkg: p.s.h_kJkg.toFixed(2) }); });
+    }
+  } else {
+    const xKey = sweepXEl.value, yKey = plotYEl.value, [minX, maxX] = xKey === "rpm" ? [1500, 5500] : [8, 20];
+    for (let i = 0; i <= 12; i++) {
+      const xv = minX + (maxX - minX) * i / 12;
+      const { simNodes } = SM.solve(nodes, edges, globalFluid, globalRefProp, { ...getSolverOpts(), override: { [xKey]: xv } });
+      const comp = simNodes.find(n => n.type === "compressor" && n.result), evap = simNodes.find(n => n.type === "hx" && n.result && !n.result.metrics.isCondenser);
+      if (!comp) continue;
+      const cop = (evap && comp.result.metrics.W_shaft_kW > 0) ? evap.result.metrics.Q_kW / comp.result.metrics.W_shaft_kW : 0;
+      lastExportRows.push({ [xKey]: xv.toFixed(1), T1_C: comp.result.inlet.T_C.toFixed(2), T2_C: comp.result.outlet.T_C.toFixed(2), W_shaft_kW: comp.result.metrics.W_shaft_kW.toFixed(3), Q_evap_kW: evap ? evap.result.metrics.Q_kW.toFixed(3) : "", COP: cop.toFixed(3) });
+      labels.push(xv.toFixed(0)); values.push(yKey === "COP" ? cop : (yKey === "Q_evap" && evap ? evap.result.metrics.Q_kW : (yKey === "W_shaft" ? comp.result.metrics.W_shaft_kW : comp.result.outlet.T_C)));
+    }
+  }
+  if (values.length < 2) return;
+  const minY = Math.min(...values) * 0.94, maxY = Math.max(...values) * 1.06 + 1e-4;
+  const xOf = i => padL + (pW * i) / (values.length - 1), yOf = v => (H - padB) - ((v - minY) / (maxY - minY)) * pH;
+  ctx.strokeStyle = "#1e293b"; ctx.fillStyle = "#64748b"; ctx.font = "10.5px sans-serif";
+  for (let i = 0; i <= 4; i++) { const gy = padT + (pH * i) / 4; ctx.beginPath(); ctx.moveTo(padL, gy); ctx.lineTo(W - padR, gy); ctx.stroke(); ctx.fillText((maxY - (maxY - minY) * i / 4).toFixed(1), 6, gy + 4); }
+  ctx.strokeStyle = "#475569"; ctx.beginPath(); ctx.moveTo(padL, padT); ctx.lineTo(padL, H - padB); ctx.lineTo(W - padR, H - padB); ctx.stroke();
+  ctx.strokeStyle = "#38bdf8"; ctx.lineWidth = 2.5; ctx.beginPath(); values.forEach((v, i) => i === 0 ? ctx.moveTo(xOf(i), yOf(v)) : ctx.lineTo(xOf(i), yOf(v))); ctx.stroke();
+  values.forEach((v, i) => { ctx.fillStyle = "#f59e0b"; ctx.beginPath(); ctx.arc(xOf(i), yOf(v), 4, 0, Math.PI * 2); ctx.fill(); if (values.length <= 6 || i % 2 === 0) { ctx.fillStyle = "#94a3b8"; ctx.fillText(labels[i], Math.min(W - 55, Math.max(padL, xOf(i) - 14)), H - padB + 15); } });
+}
+
+document.getElementById("exportCsvBtn").onclick = () => {
+  if (!lastExportRows.length) return;
+  const h = Object.keys(lastExportRows[0]), csv = "\uFEFF" + [h.join(","), ...lastExportRows.map(r => h.map(k => r[k]).join(","))].join("\n");
+  const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8;" })); a.download = `cycle_${plotModeEl.value}.csv`; a.click();
+};
+
+// ================= 단품 점검 & 물성치 탭 =================
+let scCsvs = { is: CM.DEFAULT_EFF_CSV.is, vol: CM.DEFAULT_EFF_CSV.vol, mech: CM.DEFAULT_EFF_CSV.mech }, scTab = "is";
+let shParams = { method: "UA", UA_kWK: 1.2, NTU_val: 1.0, area_m2: 12.0, Dh_mm: 6.0, h_air_Wm2K: 80, corr_C: 0.023, corr_m: 0.8, corr_n: 0.4 };
+function refreshSingleModelSelects() {
+  document.getElementById("scModelSel").innerHTML = `<option value="">-- 압축기 모델 --</option>` + Object.keys(loadStore(KEY_COMP)).map(k => `<option value="${k}">${k}</option>`).join("");
+  document.getElementById("shModelSel").innerHTML = `<option value="">-- 열교환기 모델 --</option>` + Object.keys(loadStore(KEY_HX)).map(k => `<option value="${k}">${k}</option>`).join("");
+}
+function renderSingleHxMethodFields() {
+  shParams.method = document.getElementById("shMethod").value;
+  document.getElementById("shMethodFields").innerHTML = hxMethodFieldsHTML(shParams, "sh");
+  ["shUA:UA_kWK","shNTU:NTU_val","shArea:area_m2","shDh:Dh_mm","shHair:h_air_Wm2K","shC:corr_C","shM:corr_m","shN:corr_n"].forEach(s => { const [id, k] = s.split(":"); const el = document.getElementById(id); if (el) el.oninput = e => { shParams[k] = +e.target.value; runSingleHx(); }; });
+}
+function runSingleComp() {
+  const maps = { is: new CM.EfficiencyMap2D(scCsvs.is), vol: new CM.EfficiencyMap2D(scCsvs.vol), mech: new CM.EfficiencyMap2D(scCsvs.mech) };
+  const res = CM.run({ fluid: globalFluid, P1_bar: +document.getElementById("scP1").value, P2_bar: +document.getElementById("scP2").value, T1_C: +document.getElementById("scT1").value, rpm: +document.getElementById("scRpm").value, vd_cc: +document.getElementById("scVd").value }, maps, globalRefProp);
+  document.getElementById("scKpis").innerHTML = [["압력비 PR", res.metrics.PR.toFixed(2), globalFluid, "#38bdf8"], ["질량유량", res.outlet.m_dot.toFixed(4)+" kg/s", `η_v ${(res.metrics.eff_vol*100).toFixed(1)}%`, "#22c55e"], ["출구온도", res.outlet.T_C.toFixed(1)+" °C", `SH2 ${res.outlet.SH.toFixed(1)} K`, "#f97316"], ["축동력", res.metrics.W_shaft_kW.toFixed(2)+" kW", `η_is ${(res.metrics.eff_is*100).toFixed(1)}%`, "#f59e0b"]].map(([l,v,s,c]) => `<div class="kpi"><div class="lbl">${l}</div><div class="val" style="color:${c}">${v}</div><div class="sub">${s}</div></div>`).join("");
+  document.getElementById("scDetail").innerHTML = `• 증발온도: <b>${res.inlet.T_sat_C.toFixed(1)}°C</b> | 응축온도: <b>${res.outlet.T_sat_C.toFixed(1)}°C</b>`;
+}
+function runSingleHx() {
+  const pin = +document.getElementById("shPin").value, tin = +document.getElementById("shTin").value, tsat = globalRefProp.tSatC(pin);
+  const inS = { fluid: globalFluid, P_bar: pin, T_C: tin, m_dot: +document.getElementById("shMdot").value, T_sat_C: tsat, h_kJkg: globalRefProp.hgKJ(tsat) + (globalRefProp.getConst().cp_v/1000)*Math.max(0, tin - tsat) };
+  const res = HX.run(inS, { ...shParams, T_air_in: +document.getElementById("shTair").value, m_air_kgs: +document.getElementById("shMair").value, dP_bar: +document.getElementById("shDP").value }, globalRefProp);
+  document.getElementById("shKpis").innerHTML = [["열량 Q", res.metrics.Q_kW.toFixed(2)+" kW", res.metrics.role, "#38bdf8"], ["유효 UA", res.metrics.UA_eff.toFixed(2)+" kW/K", `NTU ${res.metrics.NTU.toFixed(2)}`, "#22c55e"], ["냉매 출구", res.outlet.T_C.toFixed(1)+" °C", res.metrics.phase, "#a78bfa"], ["공기 출구", res.metrics.T_air_out.toFixed(1)+" °C", res.metrics.method, "#f59e0b"]].map(([l,v,s,c]) => `<div class="kpi"><div class="lbl">${l}</div><div class="val" style="color:${c}">${v}</div><div class="sub">${s}</div></div>`).join("");
+  document.getElementById("shDetail").innerHTML = `• 엔탈피: <b>${res.inlet.h_kJkg.toFixed(1)} → ${res.outlet.h_kJkg.toFixed(1)} kJ/kg</b>`;
+}
+function runPropCheck() {
+  const t = +document.getElementById("testT").value, p = +document.getElementById("testP").value;
+  document.getElementById("propKpis").innerHTML = [[`P_sat (${t}°C)`, globalRefProp.pSatBar(t).toFixed(3)+" bar", "포화압력", "#38bdf8"], [`T_sat (${p} bar)`, globalRefProp.tSatC(p).toFixed(2)+" °C", "포화온도", "#f97316"], ["포화증기 h_g", globalRefProp.hgKJ(t).toFixed(1)+" kJ/kg", globalFluid, "#22c55e"], ["증발잠열", globalRefProp.getConst().h_fg+" kJ/kg", "잠열", "#a78bfa"]].map(([l,v,s,c]) => `<div class="kpi"><div class="lbl">${l}</div><div class="val" style="color:${c}">${v}</div><div class="sub">${s}</div></div>`).join("");
+  const cvs = document.getElementById("propCanvas"), rect = cvs.getBoundingClientRect(); if (rect.width < 50) return;
+  const dpr = window.devicePixelRatio || 1, W = Math.floor(rect.width), H = Math.floor(rect.height); cvs.width = Math.floor(W*dpr); cvs.height = Math.floor(H*dpr);
+  const ctx = cvs.getContext("2d"); ctx.setTransform(dpr,0,0,dpr,0,0); ctx.clearRect(0,0,W,H);
+  const pts = globalRefProp.points, minT = Math.min(...pts.map(x=>x.T_C))-5, maxT = Math.max(...pts.map(x=>x.T_C))+5, maxP = Math.max(...pts.map(x=>x.P_bar))*1.1;
+  const padL=48, padR=20, padT=18, padB=30, pW=W-padL-padR, pH=H-padT-padB, xOf = x => padL + ((x-minT)/(maxT-minT))*pW, yOf = y => (H-padB) - (y/maxP)*pH;
+  ctx.strokeStyle="#475569"; ctx.beginPath(); ctx.moveTo(padL,padT); ctx.lineTo(padL,H-padB); ctx.lineTo(W-padR,H-padB); ctx.stroke();
+  ctx.strokeStyle="#38bdf8"; ctx.lineWidth=2.5; ctx.beginPath(); for(let i=0;i<=60;i++){const tx=minT+(maxT-minT)*i/60; i===0?ctx.moveTo(xOf(tx),yOf(globalRefProp.pSatBar(tx))):ctx.lineTo(xOf(tx),yOf(globalRefProp.pSatBar(tx)));} ctx.stroke();
+  pts.forEach(pt=>{ctx.fillStyle="#f59e0b"; ctx.beginPath(); ctx.arc(xOf(pt.T_C),yOf(pt.P_bar),4,0,Math.PI*2); ctx.fill();});
+}
+
+document.getElementById("globalFluidSel").innerHTML = Object.keys(CM.FLUID_CONST).map(f => `<option value="${f}">${f}</option>`).join("");
+document.getElementById("globalFluidSel").onchange = e => { globalFluid = e.target.value; globalRefProp = new CM.RefrigerantProp(globalFluid); document.getElementById("propCsvText").value = globalRefProp.rawText; runPropCheck(); };
+document.getElementById("applyPropCsvBtn").onclick = () => { try { globalRefProp.parseCSV(document.getElementById("propCsvText").value); document.getElementById("propStatus").textContent = "피팅 완료"; runPropCheck(); } catch (e) { document.getElementById("propStatus").textContent = "오류: " + e.message; } };
+["testT","testP"].forEach(id => document.getElementById(id).oninput = runPropCheck);
+["scP1","scP2","scT1","scRpm","scVd"].forEach(id => document.getElementById(id).oninput = runSingleComp);
+["shPin","shTin","shMdot","shTair","shMair","shDP"].forEach(id => document.getElementById(id).oninput = runSingleHx);
+document.getElementById("shMethod").onchange = () => { renderSingleHxMethodFields(); runSingleHx(); };
+document.querySelectorAll("#scCsvTabs .sub-btn").forEach(b => b.onclick = () => { document.querySelectorAll("#scCsvTabs .sub-btn").forEach(x=>x.classList.remove("active")); b.classList.add("active"); scTab = b.dataset.t; document.getElementById("scCsvText").value = scCsvs[scTab]; });
+document.getElementById("scApplyCsv").onclick = () => { scCsvs[scTab] = document.getElementById("scCsvText").value; runSingleComp(); };
+document.getElementById("scModelSave").onclick = () => { const nm = document.getElementById("scModelName").value.trim(); if (!nm) return; const st = loadStore(KEY_COMP); st[nm] = { P1_bar:+document.getElementById("scP1").value, P2_bar:+document.getElementById("scP2").value, T1_C:+document.getElementById("scT1").value, rpm:+document.getElementById("scRpm").value, vd_cc:+document.getElementById("scVd").value, csv_is:scCsvs.is, csv_vol:scCsvs.vol, csv_mech:scCsvs.mech }; saveStore(KEY_COMP, st); refreshSingleModelSelects(); };
+document.getElementById("scModelSel").onchange = e => { const m = loadStore(KEY_COMP)[e.target.value]; if (!m) return; document.getElementById("scModelName").value = e.target.value; document.getElementById("scP1").value=m.P1_bar; document.getElementById("scP2").value=m.P2_bar; document.getElementById("scT1").value=m.T1_C; document.getElementById("scRpm").value=m.rpm; document.getElementById("scVd").value=m.vd_cc; scCsvs={is:m.csv_is,vol:m.csv_vol,mech:m.csv_mech}; document.getElementById("scCsvText").value=scCsvs[scTab]; runSingleComp(); };
+document.getElementById("scModelDel").onclick = () => { const nm = document.getElementById("scModelSel").value; if (!nm) return; const st = loadStore(KEY_COMP); delete st[nm]; saveStore(KEY_COMP, st); refreshSingleModelSelects(); };
+document.getElementById("shModelSave").onclick = () => { const nm = document.getElementById("shModelName").value.trim(); if (!nm) return; const st = loadStore(KEY_HX); st[nm] = { ...shParams, T_air_in:+document.getElementById("shTair").value, m_air_kgs:+document.getElementById("shMair").value, dP_bar:+document.getElementById("shDP").value }; saveStore(KEY_HX, st); refreshSingleModelSelects(); };
+document.getElementById("shModelSel").onchange = e => { const m = loadStore(KEY_HX)[e.target.value]; if (!m) return; document.getElementById("shModelName").value = e.target.value; shParams = { ...shParams, ...m }; document.getElementById("shMethod").value = shParams.method; document.getElementById("shTair").value=m.T_air_in; document.getElementById("shMair").value=m.m_air_kgs; document.getElementById("shDP").value=m.dP_bar; renderSingleHxMethodFields(); runSingleHx(); };
+document.getElementById("shModelDel").onclick = () => { const nm = document.getElementById("shModelSel").value; if (!nm) return; const st = loadStore(KEY_HX); delete st[nm]; saveStore(KEY_HX, st); refreshSingleModelSelects(); };
+document.querySelectorAll(".palette-item").forEach(item => { item.onclick = () => { const n = createNodeData(item.dataset.add, 80 + (nodes.length % 4) * 55, 60 + (nodes.length % 3) * 45, 0); nodes.push(n); selectedNodeIds = new Set([n.id]); runSimulation(); }; });
+
+function loadSampleCircuit() {
+  nodes = []; edges = []; nextId = 1;
+  const comp = createNodeData("compressor", 110, 140, 270);
+  const cond = createNodeData("hx", 340, 20, 0); cond.modelName = "응축기(Condenser)";
+  const valv = createNodeData("valve", 570, 140, 90);
+  const evap = createNodeData("hx", 340, 250, 180); evap.modelName = "증발기(Evaporator)";
+  evap.params.T_air_in = 22.0; evap.params.UA_kWK = 0.85; evap.params.dP_bar = 0.1;
+  nodes.push(comp, cond, valv, evap);
+  edges.push({ id: "e1", from: comp.id, to: cond.id, stream: null }, { id: "e2", from: cond.id, to: valv.id, stream: null }, { id: "e3", from: valv.id, to: evap.id, stream: null }, { id: "e4", from: evap.id, to: comp.id, stream: null });
+  selectedNodeIds = new Set([comp.id]);
+  runSimulation(true);
+}
+
+document.getElementById("sampleBtn").onclick = loadSampleCircuit;
+document.getElementById("clearBtn").onclick = () => { nodes = []; edges = []; selectedNodeIds.clear(); runSimulation(); };
+document.getElementById("saveJsonBtn").onclick = () => {
+  const payload = { fluid: globalFluid, solver: solverSelect.value, nodes: nodes.map(({ id, type, x, y, rot, modelName, params }) => ({ id, type, x, y, rot, modelName, params })), edges: edges.map(({ id, from, to }) => ({ id, from, to })) };
+  const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" })); a.download = "cycle_circuit.json"; a.click();
+};
+document.getElementById("loadJsonBtn").onclick = () => document.getElementById("jsonFileInput").click();
+document.getElementById("jsonFileInput").onchange = e => {
+  const f = e.target.files[0]; if (!f) return;
+  const r = new FileReader(); r.onload = ev => { try { const d = JSON.parse(ev.target.result); if (d.fluid) { globalFluid = d.fluid; globalRefProp = new CM.RefrigerantProp(globalFluid); } if (d.solver) solverSelect.value = d.solver; nodes = (d.nodes || []).map(n => ({ ...n, result: null })); edges = (d.edges || []).map(ed => ({ ...ed, stream: null })); nextId = nodes.length + edges.length + 10; selectedNodeIds = new Set(); runSimulation(true); } catch { alert("올바른 JSON 파일이 아닙니다."); } };
+  r.readAsText(f); e.target.value = "";
+};
+
+window.addEventListener("resize", () => { drawPlot(); if (document.getElementById("page-prop").classList.contains("active")) runPropCheck(); if (document.getElementById("page-solver").classList.contains("active")) renderSolverTab(); });
+document.getElementById("propCsvText").value = globalRefProp.rawText;
+document.getElementById("scCsvText").value = scCsvs.is;
+refreshSingleModelSelects(); syncPlotOptions(); loadSampleCircuit();
+</script>
+</body>
+</html>
