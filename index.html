@@ -122,6 +122,7 @@
   .doc-card h3 { color: var(--accent); font-size: 13px; margin-bottom: 4px; }
   .doc-card code { background: #1e293b; color: #facc15; padding: 2px 6px; border-radius: 4px; font-size: 11.5px; }
 /* ================= 모바일 반응형 레이아웃 ================= */
+/* ================= 모바일 반응형 레이아웃 (통합 캔버스 깨짐 수정) ================= */
 @media (max-width: 900px) {
   body {
     height: auto;
@@ -129,81 +130,104 @@
     overflow-y: auto;
   }
 
-  /* 상단 툴바 및 탭 줄바꿈 허용 */
+  /* 1. 상단 툴바: 세로 정리 및 줄바꿈 */
   .toolbar {
     height: auto;
     flex-direction: column;
     align-items: stretch;
-    padding: 8px 10px;
-    gap: 8px;
+    padding: 8px;
+    gap: 6px;
   }
-  .page-tabs, .toolbar-btns {
+  .page-tabs {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 4px;
+  }
+  .page-btn {
+    font-size: 11px;
+    padding: 6px 4px;
+    text-align: center;
+  }
+  .toolbar-btns {
     flex-wrap: wrap;
     gap: 5px;
   }
-  .page-btn {
+  .solver-sel {
+    width: 100%;
+  }
+  .conv-badge, .cop-badge {
+    font-size: 10.5px;
+    padding: 3px 7px;
+  }
+  .toolbar-btns button {
     flex: 1 1 auto;
-    text-align: center;
     font-size: 11px;
-    padding: 6px 6px;
+    padding: 5px 6px;
   }
 
+  /* 2. 페이지 & 중앙 컬럼 잘림 해제 */
   .page.active {
     display: block;
     overflow: visible;
   }
-
-  /* 3단 캔버스 -> 1단 세로 배치 */
-  .workspace {
+  .workspace, .center-col {
     display: flex;
     flex-direction: column;
     overflow: visible;
+    height: auto;
   }
 
-  /* 팔레트: 가로 1줄 배치 */
+  /* 3. 좌측 팔레트 -> 상단 가로 3버튼 */
   .palette {
     border-right: none;
     border-bottom: 1px solid var(--border);
     flex-direction: row;
-    flex-wrap: wrap;
-    padding: 8px;
+    padding: 6px 8px;
+    gap: 6px;
   }
-  .palette h2, .palette-help {
+  .palette h2, .palette-help, .palette-item .desc {
     display: none;
   }
   .palette-item {
-    flex: 1 1 30%;
-    padding: 6px;
+    flex: 1;
+    padding: 6px 4px;
     justify-content: center;
   }
-  .palette-item .desc {
-    display: none;
+  .palette-item .title {
+    font-size: 11px;
   }
 
-  /* 캔버스 & 플랏터 높이 확보 */
+  /* 4. 캔버스: 가로 스크롤 허용 + SVG/배관 잘림 방지 */
   .canvas-wrap {
-    height: 380px;
+    height: 390px;
     flex: none;
     overflow: auto;
+    -webkit-overflow-scrolling: touch;
   }
+  #wireSvg, #nodeLayer, #labelLayer {
+    min-width: 720px;
+    min-height: 380px;
+  }
+
+  /* 5. 하단 플랏터 & 속성창 */
   .plotter {
-    height: 260px;
+    height: 250px;
+    flex: none;
   }
   .plotter-bar {
     height: auto;
     flex-wrap: wrap;
     padding: 6px 8px;
-    gap: 6px;
+    gap: 5px;
   }
-
-  /* 속성창: 하단 전체 너비 */
   .inspector {
     border-left: none;
     border-top: 2px solid var(--border);
     overflow: visible;
+    height: auto;
   }
 
-  /* 단품 점검 / 물성치 / 솔버 탭: 1단 배치 & KPI 2열 */
+  /* 6. 단품 점검 / 물성치 / 솔버 탭 */
   .single-layout {
     grid-template-columns: 1fr;
     padding: 10px;
@@ -212,8 +236,7 @@
   .kpi-grid {
     grid-template-columns: repeat(2, 1fr);
   }
-}
-</style>
+}</style>
 </head>
 <body>
 
