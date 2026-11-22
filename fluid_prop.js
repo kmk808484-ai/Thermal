@@ -1,5 +1,8 @@
-// fluid_prop.js — CoolProp 기반 2상(포화 1D + 과냉/과열 2D) 및 단상(GW, Air 등) 물성치 엔진
+// fluid_prop.js — CoolProp 기반 2상(포화 1D log(P) PCHIP + 과냉/과열 2D) 및 단상(GW, Air 등) 물성치 엔진
+// 개선: log(P) PCHIP 단조 3차 보간(2상 ρ 오차 대폭 축소), 범위 초과 플래그/경고, 과열 상한 외삽(Cp 기반), 표면장력 σ(T), DB 버전 관리
 (function (global) {
+  const FLUID_DB_VERSION = "2026.11.v2";
+
   const TABLE_KEYS = [
     { key: "h",   label: "엔탈피 (kJ/kg)" },
     { key: "T",   label: "온도 (°C)" },
@@ -9,6 +12,13 @@
     { key: "k",   label: "열전도도 (mW/m-K)" },
     { key: "Cp",  label: "정압비열 (kJ/kg-K)" }
   ];
+
+  // 냉매별 임계온도/표면장력 상수 (Brock-Bird / Mulero 피팅, σ = σ0 * (1 - T/Tc)^mu [N/m])
+  const SURFACE_TENSION_PARAMS = {
+    R134a: { Tc_K: 374.21, sigma0: 0.0568, exp: 1.242 },
+    R32:   { Tc_K: 351.255, sigma0: 0.0680, exp: 1.250 },
+    Water: { Tc_K: 647.096, sigma0: 0.1280, exp: 1.256 }
+  };
 
   function splitLine(line) {
     if (line.includes(",")) return line.split(",").map(s => s.trim());
@@ -54,7 +64,7 @@
     }
     if (rowList.length < 2) throw new Error("유효한 압력(Y축) 행이 최소 2행 필요합니다.");
     rowList.sort((a, b) => a.P - b.P);
-    return { P: rowList.map(r => r.P), dH, grid: rowList.map(r => r.vals) };
+    return { P: rowList.map(r => r.P), logP: rowList.map(r => Math.log(Math.max(1e-6, r.P))), dH, grid: rowList.map(r => r.vals) };
   }
 
   function parseSinglePhaseCSV(text) {
@@ -72,6 +82,58 @@
     return tbl;
   }
 
+  // Fritsch-Carlson 단조 3차 Hermite 스플라인(PCHIP) 기울기 사전 계산
+  function buildPchipSlopes(xs, ys) {
+    const n = xs.length;
+    const d = new Array(n).fill(0);
+    if (n < 2) return d;
+    if (n === 2) {
+      const s = (ys[1] - ys[0]) / (xs[1] - xs[0] || 1e-12);
+      return [s, s];
+    }
+    const h = new Array(n - 1), del = new Array(n - 1);
+    for (let i = 0; i < n - 1; i++) {
+      h[i] = xs[i + 1] - xs[i] || 1e-12;
+      del[i] = (ys[i + 1] - ys[i]) / h[i];
+    }
+    for (let i = 1; i < n - 1; i++) {
+      if (del[i - 1] * del[i] <= 0) {
+        d[i] = 0;
+      } else {
+        const w1 = 2 * h[i] + h[i - 1];
+        const w2 = h[i] + 2 * h[i - 1];
+        d[i] = (w1 + w2) / (w1 / del[i - 1] + w2 / del[i]);
+      }
+    }
+    // 끝점 기울기 (shape-preserving)
+    let d0 = ((2 * h[0] + h[1]) * del[0] - h[0] * del[1]) / (h[0] + h[1]);
+    if (d0 * del[0] <= 0) d0 = 0;
+    else if (del[0] * del[1] <= 0 && Math.abs(d0) > Math.abs(3 * del[0])) d0 = 3 * del[0];
+    d[0] = d0;
+
+    let dn = ((2 * h[n - 2] + h[n - 3]) * del[n - 2] - h[n - 2] * del[n - 3]) / (h[n - 2] + h[n - 3]);
+    if (dn * del[n - 2] <= 0) dn = 0;
+    else if (del[n - 2] * del[n - 3] <= 0 && Math.abs(dn) > Math.abs(3 * del[n - 2])) dn = 3 * del[n - 2];
+    d[n - 1] = dn;
+    return d;
+  }
+
+  function evalPchip(xs, ys, ds, x) {
+    const n = xs.length;
+    if (x <= xs[0]) return ys[0];
+    if (x >= xs[n - 1]) return ys[n - 1];
+    let lo = 0, hi = n - 1;
+    while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (xs[mid] <= x) lo = mid; else hi = mid; }
+    const h = xs[hi] - xs[lo] || 1e-12;
+    const t = (x - xs[lo]) / h;
+    const t2 = t * t, t3 = t2 * t;
+    const h00 = 2 * t3 - 3 * t2 + 1;
+    const h10 = t3 - 2 * t2 + t;
+    const h01 = -2 * t3 + 3 * t2;
+    const h11 = t3 - t2;
+    return h00 * ys[lo] + h10 * h * ds[lo] + h01 * ys[hi] + h11 * h * ds[hi];
+  }
+
   function interp1D(xs, ys, x) {
     const n = xs.length;
     if (x <= xs[0]) return ys[0];
@@ -82,16 +144,22 @@
     return ys[lo] + t * (ys[hi] - ys[lo]);
   }
 
+  // log(P) 축을 사용한 2D 쌍선형 보간 (압력 방향 곡률 오차 축소 + 범위초과 여부 반환)
   function interp2D(mat, P, dH) {
-    const Ps = mat.P, dHs = mat.dH, G = mat.grid;
-    const pC = Math.min(Ps[Ps.length - 1], Math.max(Ps[0], P));
-    const hC = Math.min(dHs[dHs.length - 1], Math.max(dHs[0], dH));
+    const Ps = mat.P, logPs = mat.logP, dHs = mat.dH, G = mat.grid;
+    const pMin = Ps[0], pMax = Ps[Ps.length - 1];
+    const hMin = dHs[0], hMax = dHs[dHs.length - 1];
+    const pC = Math.min(pMax, Math.max(pMin, P));
+    const hC = Math.min(hMax, Math.max(hMin, dH));
+    const logPc = Math.log(Math.max(1e-6, pC));
+
     let i0 = 0, i1 = Ps.length - 1;
     while (i1 - i0 > 1) { const m = (i0 + i1) >> 1; if (Ps[m] <= pC) i0 = m; else i1 = m; }
     let j0 = 0, j1 = dHs.length - 1;
     while (j1 - j0 > 1) { const m = (j0 + j1) >> 1; if (dHs[m] <= hC) j0 = m; else j1 = m; }
+
     const tx = (hC - dHs[j0]) / (dHs[j1] - dHs[j0] || 1e-12);
-    const ty = (pC - Ps[i0]) / (Ps[i1] - Ps[i0] || 1e-12);
+    const ty = (logPc - logPs[i0]) / (logPs[i1] - logPs[i0] || 1e-12);
     const v0 = G[i0][j0] + tx * (G[i0][j1] - G[i0][j0]);
     const v1 = G[i1][j0] + tx * (G[i1][j1] - G[i1][j0]);
     return v0 + ty * (v1 - v0);
@@ -152,14 +220,36 @@
     constructor(name = "R134a", raw = null) {
       this.name = name;
       this.raw = raw || buildDefaultR134aRaw();
+      this._rangeWarnings = new Set();
       this.compile(this.raw);
     }
+
+    resetWarnings() { this._rangeWarnings.clear(); }
+    getWarnings() { return [...this._rangeWarnings]; }
+    _warn(msg) { if (this._rangeWarnings.size < 12) this._rangeWarnings.add(msg); }
+
     compile(raw) {
       this.raw = raw;
       this.kind = raw.kind || (raw.sat ? "two_phase" : "single_phase");
       this.single = raw.single ? parseSinglePhaseCSV(raw.single) : null;
       if (this.kind === "two_phase") {
         this.sat = parseSatCSV(raw.sat);
+        this.satLogP = this.sat.P.map(p => Math.log(Math.max(1e-6, p)));
+        this.satLogRhoG = this.sat.rho_g.map(r => Math.log(Math.max(1e-6, r)));
+        // 포화선 PCHIP 계수 사전 계산 (log P 축 기준 — 2상 밀도 및 T_sat 보간 정밀도 극대화)
+        this.satSlopes = {};
+        Object.keys(this.sat).forEach(k => {
+          if (k === "P") return;
+          if (k === "rho_g") {
+            this.satSlopes.log_rho_g = buildPchipSlopes(this.satLogP, this.satLogRhoG);
+          } else {
+            this.satSlopes[k] = buildPchipSlopes(this.satLogP, this.sat[k]);
+          }
+        });
+        this.tSatToLogPSlopes = buildPchipSlopes(this.sat.T_sat, this.satLogP);
+        this.tSatToHfSlopes = buildPchipSlopes(this.sat.T_sat, this.sat.h_f);
+        this.tSatToHgSlopes = buildPchipSlopes(this.sat.T_sat, this.sat.h_g);
+
         this.sub = {}; this.sup = {};
         TABLE_KEYS.forEach(({ key }) => {
           this.sub[key] = parseMatrixCSV(raw.sub[key]);
@@ -168,6 +258,8 @@
         this.isolines = this.buildIsolines(10, [5, 10, 20, 40, 80, 150, 300]);
       } else {
         this.sat = null;
+        this.satLogP = null;
+        this.satSlopes = null;
         this.sub = null;
         this.sup = null;
         this.isolines = null;
@@ -175,12 +267,24 @@
       }
     }
 
+    getSurfaceTension(P_bar) {
+      if (this.kind !== "two_phase") return 0.05;
+      const sp = SURFACE_TENSION_PARAMS[this.name] || SURFACE_TENSION_PARAMS.R134a;
+      const T_K = this.tSatC(P_bar) + 273.15;
+      const tr = Math.min(0.995, Math.max(0.1, T_K / sp.Tc_K));
+      return Math.max(1e-4, sp.sigma0 * Math.pow(1 - tr, sp.exp));
+    }
+
     evalSinglePhase(T_C, P_bar = 1.01325) {
       if (this.single) {
         const s = this.single;
+        const tMin = s.T[0], tMax = s.T[s.T.length - 1];
+        const outOfRange = T_C < tMin - 0.1 || T_C > tMax + 0.1;
+        if (outOfRange) {
+          this._warn(`${this.name} 단상 온도 범위 초과 (T=${T_C.toFixed(1)}°C, 테이블 ${tMin}~${tMax}°C)`);
+        }
         const T = T_C;
         let rho = interp1D(s.T, s.rho, T);
-        // 기체(Air) 압력 보정 (이상기체 근사)
         if (this.name === "Air" && P_bar > 0.1) {
           rho = rho * (P_bar / (s.P[0] || 1.01325));
         }
@@ -189,27 +293,50 @@
           h: interp1D(s.T, s.h, T),
           rho,
           s: interp1D(s.T, s.s, T),
-          mu: interp1D(s.T, s.mu, T),   // uPa-s
-          k: interp1D(s.T, s.k, T),     // mW/m-K
-          Cp: interp1D(s.T, s.Cp, T)    // kJ/kg-K
+          mu: interp1D(s.T, s.mu, T),
+          k: interp1D(s.T, s.k, T),
+          Cp: interp1D(s.T, s.Cp, T),
+          outOfRange
         };
       }
       if (this.kind === "two_phase") {
         const st = this.solvePT(Math.max(this.sat.P[0], P_bar), T_C);
-        return { T: st.T, P: st.P, h: st.h, rho: st.rho, s: st.s, mu: st.mu, k: st.k, Cp: st.Cp };
+        return { T: st.T, P: st.P, h: st.h, rho: st.rho, s: st.s, mu: st.mu, k: st.k, Cp: st.Cp, outOfRange: st.outOfRange };
       }
-      return { T: T_C, P: P_bar, h: 300, rho: 1.2, s: 1.0, mu: 18.5, k: 26.0, Cp: 1.005 };
+      return { T: T_C, P: P_bar, h: 300, rho: 1.2, s: 1.0, mu: 18.5, k: 26.0, Cp: 1.005, outOfRange: true };
     }
 
     getSatAtP(P) {
-      const s = this.sat, out = { P };
-      Object.keys(s).forEach(k => { if (k !== "P") out[k] = interp1D(s.P, s[k], P); });
+      const s = this.sat;
+      const pMin = s.P[0], pMax = s.P[s.P.length - 1];
+      const outOfRange = P < pMin * 0.999 || P > pMax * 1.001;
+      if (outOfRange) {
+        this._warn(`${this.name} 포화압력 범위 초과 (P=${P.toFixed(2)} bar, 테이블 ${pMin}~${pMax} bar)`);
+      }
+      const pC = Math.min(pMax, Math.max(pMin, P));
+      const lp = Math.log(Math.max(1e-6, pC));
+      const out = { P: pC, outOfRange };
+      Object.keys(s).forEach(k => {
+        if (k === "P") return;
+        if (k === "rho_g") {
+          out.rho_g = Math.exp(evalPchip(this.satLogP, this.satLogRhoG, this.satSlopes.log_rho_g, lp));
+        } else {
+          out[k] = evalPchip(this.satLogP, s[k], this.satSlopes[k], lp);
+        }
+      });
       return out;
     }
-    tSatC(P) { return interp1D(this.sat.P, this.sat.T_sat, P); }
-    pSatBar(T) { return interp1D(this.sat.T_sat, this.sat.P, T); }
-    hgKJ(T) { return interp1D(this.sat.T_sat, this.sat.h_g, T); }
-    hfKJ(T) { return interp1D(this.sat.T_sat, this.sat.h_f, T); }
+
+    tSatC(P) {
+      const pMin = this.sat.P[0], pMax = this.sat.P[this.sat.P.length - 1];
+      const lp = Math.log(Math.max(1e-6, Math.min(pMax, Math.max(pMin, P))));
+      return evalPchip(this.satLogP, this.sat.T_sat, this.satSlopes.T_sat, lp);
+    }
+    pSatBar(T) {
+      return Math.exp(evalPchip(this.sat.T_sat, this.satLogP, this.tSatToLogPSlopes, T));
+    }
+    hgKJ(T) { return evalPchip(this.sat.T_sat, this.sat.h_g, this.tSatToHgSlopes, T); }
+    hfKJ(T) { return evalPchip(this.sat.T_sat, this.sat.h_f, this.tSatToHfSlopes, T); }
 
     evalPH(P, h) {
       if (this.kind !== "two_phase") {
@@ -219,20 +346,54 @@
         return { ...st, x: 1, phase: "단상", SC: 0, SH: 0, T_sat: T };
       }
       const sat = this.getSatAtP(P);
+      let outOfRange = !!sat.outOfRange;
+
       if (h < sat.h_f - 1e-6) {
-        const dH = sat.h_f - h, T = interp2D(this.sub.T, P, dH);
+        const dH = sat.h_f - h;
+        const dHMax = this.sub.T.dH[this.sub.T.dH.length - 1];
+        let T = interp2D(this.sub.T, P, dH);
+        let rho = interp2D(this.sub.rho, P, dH);
+        let s = interp2D(this.sub.s, P, dH);
+        const mu = interp2D(this.sub.mu, P, dH);
+        const k = interp2D(this.sub.k, P, dH);
+        const Cp = Math.max(0.2, interp2D(this.sub.Cp, P, dH));
+        if (dH > dHMax) {
+          // 테이블 과냉 상한 초과 시 경계 Cp로 연속 선형 외삽 + 범위 경고
+          outOfRange = true;
+          const extra = dH - dHMax;
+          const dT = extra / Cp;
+          T -= dT;
+          s -= extra / Math.max(150, T + 273.15);
+          this._warn(`${this.name} 과냉 영역 Δh=${dH.toFixed(1)} kJ/kg 초과 (상한 ${dHMax})`);
+        }
         return {
-          P, T, h, rho: interp2D(this.sub.rho, P, dH), s: interp2D(this.sub.s, P, dH),
-          mu: interp2D(this.sub.mu, P, dH), k: interp2D(this.sub.k, P, dH), Cp: interp2D(this.sub.Cp, P, dH),
-          x: 0, phase: "과냉액체", SC: Math.max(0, sat.T_sat - T), SH: 0, T_sat: sat.T_sat
+          P, T, h, rho, s, mu, k, Cp,
+          x: 0, phase: "과냉액체", SC: Math.max(0, sat.T_sat - T), SH: 0, T_sat: sat.T_sat, outOfRange
         };
       }
       if (h > sat.h_g + 1e-6) {
-        const dH = h - sat.h_g, T = interp2D(this.sup.T, P, dH);
+        const dH = h - sat.h_g;
+        const dHMax = this.sup.T.dH[this.sup.T.dH.length - 1];
+        let T = interp2D(this.sup.T, P, dH);
+        let rho = interp2D(this.sup.rho, P, dH);
+        let s = interp2D(this.sup.s, P, dH);
+        const mu = interp2D(this.sup.mu, P, dH);
+        const k = interp2D(this.sup.k, P, dH);
+        const Cp = Math.max(0.2, interp2D(this.sup.Cp, P, dH));
+        if (dH > dHMax) {
+          // 고온 토출 등 과열 상한 초과 시 이상기체/Cp 연속 외삽 (뉴턴 미분 연속성 보존) + 범위 경고
+          outOfRange = true;
+          const extra = dH - dHMax;
+          const T_edge_K = T + 273.15;
+          const dT = extra / Cp;
+          T += dT;
+          rho = rho * (T_edge_K / Math.max(200, T + 273.15));
+          s += extra / Math.max(200, 0.5 * (T_edge_K + T + 273.15));
+          this._warn(`${this.name} 과열 영역 Δh=${dH.toFixed(1)} kJ/kg 초과 (상한 ${dHMax}, 외삽 적용)`);
+        }
         return {
-          P, T, h, rho: interp2D(this.sup.rho, P, dH), s: interp2D(this.sup.s, P, dH),
-          mu: interp2D(this.sup.mu, P, dH), k: interp2D(this.sup.k, P, dH), Cp: interp2D(this.sup.Cp, P, dH),
-          x: 1, phase: "과열증기", SC: 0, SH: Math.max(0, T - sat.T_sat), T_sat: sat.T_sat
+          P, T, h, rho, s, mu, k, Cp,
+          x: 1, phase: "과열증기", SC: 0, SH: Math.max(0, T - sat.T_sat), T_sat: sat.T_sat, outOfRange
         };
       }
       const x = Math.min(1, Math.max(0, (h - sat.h_f) / (sat.h_g - sat.h_f || 1e-9)));
@@ -240,7 +401,7 @@
         P, T: sat.T_sat, h, rho: 1 / ((1 - x) / sat.rho_f + x / sat.rho_g),
         s: sat.s_f + x * (sat.s_g - sat.s_f), mu: sat.mu_f + x * (sat.mu_g - sat.mu_f),
         k: sat.k_f + x * (sat.k_g - sat.k_f), Cp: sat.Cp_f + x * (sat.Cp_g - sat.Cp_f),
-        x, phase: "포화 (2상)", SC: 0, SH: 0, T_sat: sat.T_sat
+        x, phase: "포화 (2상)", SC: 0, SH: 0, T_sat: sat.T_sat, outOfRange
       };
     }
 
@@ -252,12 +413,24 @@
       const sat = this.getSatAtP(P);
       if (Math.abs(T - sat.T_sat) < 1e-3) return this.evalPH(P, sat.h_g);
       if (T < sat.T_sat) {
-        let lo = 0, hi = this.sub.T.dH[this.sub.T.dH.length - 1];
-        for (let i = 0; i < 32; i++) { const m = (lo + hi) / 2; if (interp2D(this.sub.T, P, m) > T) lo = m; else hi = m; }
+        const dHMax = this.sub.T.dH[this.sub.T.dH.length - 1];
+        const tEdge = interp2D(this.sub.T, P, dHMax);
+        if (T < tEdge) {
+          const cpEdge = Math.max(0.2, interp2D(this.sub.Cp, P, dHMax));
+          return this.evalPH(P, sat.h_f - (dHMax + (tEdge - T) * cpEdge));
+        }
+        let lo = 0, hi = dHMax;
+        for (let i = 0; i < 42; i++) { const m = (lo + hi) / 2; if (interp2D(this.sub.T, P, m) > T) lo = m; else hi = m; }
         return this.evalPH(P, sat.h_f - (lo + hi) / 2);
       } else {
-        let lo = 0, hi = this.sup.T.dH[this.sup.T.dH.length - 1];
-        for (let i = 0; i < 32; i++) { const m = (lo + hi) / 2; if (interp2D(this.sup.T, P, m) < T) lo = m; else hi = m; }
+        const dHMax = this.sup.T.dH[this.sup.T.dH.length - 1];
+        const tEdge = interp2D(this.sup.T, P, dHMax);
+        if (T > tEdge) {
+          const cpEdge = Math.max(0.2, interp2D(this.sup.Cp, P, dHMax));
+          return this.evalPH(P, sat.h_g + (dHMax + (T - tEdge) * cpEdge));
+        }
+        let lo = 0, hi = dHMax;
+        for (let i = 0; i < 42; i++) { const m = (lo + hi) / 2; if (interp2D(this.sup.T, P, m) < T) lo = m; else hi = m; }
         return this.evalPH(P, sat.h_g + (lo + hi) / 2);
       }
     }
@@ -273,12 +446,20 @@
         return this.evalPH(P, sat.h_f + x * (sat.h_g - sat.h_f));
       }
       if (s < sat.s_f) {
-        let lo = 0, hi = this.sub.s.dH[this.sub.s.dH.length - 1];
-        for (let i = 0; i < 32; i++) { const m = (lo + hi) / 2; if (interp2D(this.sub.s, P, m) > s) lo = m; else hi = m; }
+        const dHMax = this.sub.s.dH[this.sub.s.dH.length - 1];
+        let lo = 0, hi = dHMax;
+        for (let i = 0; i < 42; i++) { const m = (lo + hi) / 2; if (interp2D(this.sub.s, P, m) > s) lo = m; else hi = m; }
         return this.evalPH(P, sat.h_f - (lo + hi) / 2);
       } else {
-        let lo = 0, hi = this.sup.s.dH[this.sup.s.dH.length - 1];
-        for (let i = 0; i < 32; i++) { const m = (lo + hi) / 2; if (interp2D(this.sup.s, P, m) < s) lo = m; else hi = m; }
+        const dHMax = this.sup.s.dH[this.sup.s.dH.length - 1];
+        const sEdge = interp2D(this.sup.s, P, dHMax);
+        if (s > sEdge) {
+          const tEdgeK = interp2D(this.sup.T, P, dHMax) + 273.15;
+          const extraH = (s - sEdge) * tEdgeK;
+          return this.evalPH(P, sat.h_g + dHMax + extraH);
+        }
+        let lo = 0, hi = dHMax;
+        for (let i = 0; i < 42; i++) { const m = (lo + hi) / 2; if (interp2D(this.sup.s, P, m) < s) lo = m; else hi = m; }
         return this.evalPH(P, sat.h_g + (lo + hi) / 2);
       }
     }
@@ -346,9 +527,10 @@
         });
         if (pts.length >= 2) isochores.push({ rho: rhoT, pts });
       });
+      this.resetWarnings();
       return { isotherms, isobars, isochores };
     }
   }
 
-  global.FluidPropModule = { TABLE_KEYS, FluidTable, buildDefaultR134aRaw, getDefaultFluidDB };
+  global.FluidPropModule = { FLUID_DB_VERSION, TABLE_KEYS, FluidTable, buildDefaultR134aRaw, getDefaultFluidDB };
 })(window);

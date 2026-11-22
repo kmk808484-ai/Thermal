@@ -34,10 +34,15 @@
       : (res ? res.metrics.opening_pct : (Number(p.open_base_pct) || 50));
     const A_eff = A_max * (openPct / 100);
 
-    // 지름 변경 시 솔버 실행 전에도 즉시 가변 Cd_eff 계산
+    // 지름 변경 시 솔버 실행 전에도 연결 유체의 실제 물성으로 가변 Cd_eff 계산 (R134a 하드코딩 제거)
     const VM = global.ValveModule;
+    let prevRho = res ? res.inlet.rho : 1120, prevMu = res ? res.inlet.mu : 150;
+    if (!res && n._previewFluidProp && n._previewFluidProp.sat) {
+      const satP = n._previewFluidProp.getSatAtP(Math.min(12.5, n._previewFluidProp.sat.P[n._previewFluidProp.sat.P.length - 1] * 0.8));
+      prevRho = satP.rho_f; prevMu = satP.mu_f;
+    }
     const Cd_eff = VM && VM.calcEffectiveCd
-      ? VM.calcEffectiveCd(p, D_mm, res ? res.inlet.rho : 1120, res ? res.inlet.mu : 150, res ? res.inlet.m_dot : 0.08, Math.max(1e-7, A_eff * 1e-6), res ? res.inlet.SC : 4.0)
+      ? VM.calcEffectiveCd(p, D_mm, prevRho, prevMu, res ? res.inlet.m_dot : 0.08, Math.max(1e-7, A_eff * 1e-6), res ? res.inlet.SC : 5.0)
       : (p.Cd || 0.65);
     const isChoked = res ? !!res.metrics.is_choked : false;
     const P_choke = res && res.metrics.P_choke_bar ? res.metrics.P_choke_bar : 4.2;
@@ -192,7 +197,9 @@
     const Lp_mm = Math.max(0.5, Number(p.louver_pitch_mm) || 1.2);
     const lAng = Math.min(45, Math.max(10, Number(p.louver_angle_deg) || 27));
 
-    const segs = (res && res.metrics.segments && res.metrics.segments.length) ? res.metrics.segments : null;
+    const segs = (res && res.metrics.segments6 && res.metrics.segments6.length >= 6)
+      ? res.metrics.segments6
+      : ((res && res.metrics.segments && res.metrics.segments.length >= 6) ? res.metrics.segments : null);
     const colIn = res ? tempToCFDColor(res.inlet.T_C) : "#f97316";
     const colOut = res ? tempToCFDColor(res.outlet.T_C) : "#22c55e";
     const T_air_in = res ? res.metrics.T_sec_in : (Number(p.T_sec_in) || 35);
@@ -440,12 +447,28 @@
   }
 
   // ================= 6. 팬(Fan) 컷어웨이 & P-Q 성능곡선 교차 운전점 SVG =================
-  function buildFanCutawaySVG(n, simCfg) {
+  function buildFanCutawaySVG(n, simCfg, ctx = null) {
     const p = n.params;
-    const FM = global.FanModule;
+    const FM = global.FanModule, HX = global.HXModule;
     let res = n.result;
     if (!res && FM) {
-      try { res = FM.run({ ...p, rpm: (p.link_global !== false && simCfg) ? simCfg.fan_rpm : (p.rpm || 1800) }); } catch {}
+      try {
+        const rpmUse = (p.link_global !== false && simCfg) ? simCfg.fan_rpm : (p.rpm || 1800);
+        const T_amb = (simCfg && simCfg.T_amb_C !== undefined) ? simCfg.T_amb_C : 35;
+        const db = ctx ? ctx.fluidTableDB : null;
+        const airProp = HX ? HX.getSecProps("Air", T_amb, 1.01325, db) : { rho: 1.15 };
+        // 연결된 핀-플레이트 HX의 실제 ΔP_sec(Q) 곡선을 미리보기에도 동일 적용 (솔버 운전점과 100% 일치!)
+        let targetHx = null;
+        if (ctx && ctx.nodes && ctx.edges) {
+          const ae = ctx.edges.find(e => (e.from === n.id || e.to === n.id) && e.kind === "air");
+          if (ae) targetHx = ctx.nodes.find(h => (h.id === ae.from || h.id === ae.to) && global.SolverModule.isHxType(h.type));
+        }
+        if (targetHx && HX && HX.calcAirPressureDrop) {
+          res = FM.run({ ...p, rpm: rpmUse }, (q) => HX.calcAirPressureDrop(targetHx.params, q, T_amb, db), airProp.rho);
+        } else {
+          res = FM.run({ ...p, rpm: rpmUse }, p.K_sys || p.K_sys_default || 0.08, airProp.rho);
+        }
+      } catch {}
     }
     const rpm = res ? res.metrics.rpm : (p.rpm || 1800);
     const dur = Math.max(0.22, 2400 / Math.max(200, rpm)).toFixed(2);
@@ -516,13 +539,13 @@
     </svg>`;
   }
 
-  function buildCutawayByNode(node, simCfg) {
+  function buildCutawayByNode(node, simCfg, ctx = null) {
     if (node.type === "valve") return buildValveCutawaySVG(node);
     if (node.type === "compressor") return buildCompressorCutawaySVG(node, simCfg);
     if (node.type === "hx_fin_plate" || (node.type === "hx" && node.params.hxType !== "plate")) return buildFinPlateCutawaySVG(node);
     if (node.type === "hx_plate" || (node.type === "hx" && node.params.hxType === "plate")) return buildPlateHxCutawaySVG(node);
     if (node.type === "receiver") return buildReceiverCutawaySVG(node);
-    if (node.type === "fan") return buildFanCutawaySVG(node, simCfg);
+    if (node.type === "fan") return buildFanCutawaySVG(node, simCfg, ctx);
     if (global.SolverModule.isSensorType(node.type)) return buildSensorCutawaySVG(node);
     return "";
   }
@@ -531,21 +554,21 @@
   function buildKpiByNode(node) {
     const res = node.result;
     if (node.type === "valve") {
-      return `<div class="kpi"><div class="lbl">유효 개도율</div><div class="val" style="color:var(--purple)">${res ? res.metrics.opening_pct.toFixed(1)+'%' : '-'}</div><div class="sub">${res && res.metrics.SH_meas !== null ? `SH ${res.metrics.SH_meas.toFixed(1)}K` : ''}</div></div>
-        <div class="kpi"><div class="lbl">유효 Cd / 초크</div><div class="val" style="color:var(--accent);font-size:14.5px;">${res ? res.metrics.Cd_eff.toFixed(3) : '-'}</div><div class="sub">${res ? (res.metrics.is_choked ? '⚠️ CHOKED' : '아음속 정상') : ''}</div></div>
-        <div class="kpi"><div class="lbl">압력강하 ΔP</div><div class="val" style="color:var(--hot)">${res ? res.metrics.dP_bar.toFixed(2)+' bar' : '-'}</div></div>
+      return `<div class="kpi"><div class="lbl">유효 개도율</div><div class="val" style="color:var(--purple)">${res ? res.metrics.opening_pct.toFixed(1)+'%' : '-'}</div><div class="sub">${res && res.metrics.SH_meas !== null ? `SH ${res.metrics.SH_meas.toFixed(1)}K (정적 ${res.metrics.SH_static?.toFixed(1)||'-'}K)` : ''}</div></div>
+        <div class="kpi"><div class="lbl">유효 Cd / 초크</div><div class="val" style="color:var(--accent);font-size:14.5px;">${res ? res.metrics.Cd_eff.toFixed(3) : '-'}</div><div class="sub">${res ? (res.metrics.is_choked ? `⚠️ HEM CHOKED (${res.metrics.P_choke_bar.toFixed(1)}b)` : `아음속 (P_c=${res.metrics.P_choke_bar.toFixed(1)}b)`) : ''}</div></div>
+        <div class="kpi"><div class="lbl">밸브 유량 / ΔP</div><div class="val" style="color:var(--hot);font-size:14.5px;">${res ? `${(res.metrics.m_dot_valve??res.outlet.m_dot).toFixed(4)} kg/s` : '-'}</div><div class="sub">${res ? `ΔP ${res.metrics.dP_bar.toFixed(2)} bar` : ''}</div></div>
         <div class="kpi"><div class="lbl">출구 T4 / 건도</div><div class="val" style="color:var(--green);font-size:14.5px;">${res ? `${res.outlet.T_C.toFixed(1)}°C / x=${res.metrics.quality.toFixed(2)}` : '-'}</div></div>`;
     }
     if (node.type === "compressor") {
-      return `<div class="kpi"><div class="lbl">압력비 PR</div><div class="val" style="color:var(--accent)">${res ? res.metrics.PR.toFixed(2) : '-'}</div></div>
+      return `<div class="kpi"><div class="lbl">압력비 PR</div><div class="val" style="color:var(--accent)">${res ? res.metrics.PR.toFixed(2) : '-'}</div><div class="sub">${res ? (res.metrics.liquidSuction ? '⚠️ 액흡입 감지!' : `보간: ${res.metrics.interpMethod||'bilinear'}`) : ''}</div></div>
         <div class="kpi"><div class="lbl">질량유량</div><div class="val" style="color:var(--green)">${res ? res.outlet.m_dot.toFixed(4)+' kg/s' : '-'}</div></div>
-        <div class="kpi"><div class="lbl">토출온도 T2</div><div class="val" style="color:var(--hot)">${res ? res.outlet.T_C.toFixed(1)+' °C' : '-'}</div></div>
-        <div class="kpi"><div class="lbl">축동력 W</div><div class="val" style="color:var(--warn)">${res ? res.metrics.W_shaft_kW.toFixed(2)+' kW' : '-'}</div></div>`;
+        <div class="kpi"><div class="lbl">토출온도 T2</div><div class="val" style="color:var(--hot)">${res ? res.outlet.T_C.toFixed(1)+' °C' : '-'}</div><div class="sub">${res ? `쉘손실 ${(res.metrics.Q_shell_kW||0).toFixed(2)} kW` : ''}</div></div>
+        <div class="kpi"><div class="lbl">축동력 / 소비전력</div><div class="val" style="color:var(--warn);font-size:14px;">${res ? `${res.metrics.W_shaft_kW.toFixed(2)} / ${(res.metrics.W_elec_kW||res.metrics.W_shaft_kW).toFixed(2)} kW` : '-'}</div></div>`;
     }
     if (global.SolverModule.isHxType(node.type)) {
-      return `<div class="kpi"><div class="lbl">열교환량 Q</div><div class="val" style="color:var(--accent)">${res ? res.metrics.Q_kW.toFixed(2)+' kW' : '-'}</div><div class="sub">${res ? res.metrics.role : ''}</div></div>
-        <div class="kpi"><div class="lbl">h_ref / h_sec</div><div class="val" style="color:var(--green);font-size:14px;">${res ? `${res.metrics.h_ref_Wm2K.toFixed(0)} / ${res.metrics.h_sec_Wm2K.toFixed(0)}` : '-'}</div><div class="sub">W/m²K</div></div>
-        <div class="kpi"><div class="lbl">모멘텀 ΔP</div><div class="val" style="color:var(--hot)">${res ? res.metrics.dP_bar.toFixed(3)+' bar' : '-'}</div></div>
+      return `<div class="kpi"><div class="lbl">열교환량 Q</div><div class="val" style="color:var(--accent)">${res ? res.metrics.Q_kW.toFixed(2)+' kW' : '-'}</div><div class="sub">${res ? `${res.metrics.role} · ${res.metrics.nSegments||20}세그먼트` : ''}</div></div>
+        <div class="kpi"><div class="lbl">h_ref / h_sec</div><div class="val" style="color:var(--green);font-size:14px;">${res ? `${res.metrics.h_ref_Wm2K.toFixed(0)} / ${res.metrics.h_sec_Wm2K.toFixed(0)}` : '-'}</div><div class="sub">${res ? `W/m²K · ${res.metrics.secondLawViolated ? '⚠️ 제2법칙 위반' : '✓ 제2법칙 통과'}` : 'W/m²K'}</div></div>
+        <div class="kpi"><div class="lbl">모멘텀 ΔP</div><div class="val" style="color:var(--hot)">${res ? res.metrics.dP_bar.toFixed(3)+' bar' : '-'}</div><div class="sub">${res ? `2차측 ${res.metrics.dP_sec_Pa.toFixed(0)} Pa` : ''}</div></div>
         <div class="kpi"><div class="lbl">냉매 보유량</div><div class="val" style="color:var(--purple)">${res ? (res.metrics.mass_kg*1000).toFixed(0)+' g' : '-'}</div><div class="sub">${res ? `V ${res.metrics.V_int_L.toFixed(2)} L` : ''}</div></div>`;
     }
     if (node.type === "receiver") {
@@ -583,26 +606,45 @@
       });
     };
 
-    // 1) 솔버 상세 탭
+    // 1) 솔버 상세 탭 (솔버창: 질량 → 에너지 → 모멘텀 → 최종 솔버 잔차 수렴 순서·이력·이중 곡선 통합 모니터링)
     if (node.type === "solver") {
       const p = node.params, c = lastConvergence;
+      const ms = c && c.milestones ? c.milestones : null;
+      const cons = c && c.conservation ? c.conservation : null;
+      const pillStage = (num, title, ok, iterNo, valStr, tolStr) => {
+        const bg = !c ? "var(--panel-dark)" : (ok ? "#16a34a18" : "#dc262618");
+        const bd = !c ? "var(--border)" : (ok ? "#16a34a" : "#dc2626");
+        const col = !c ? "var(--muted)" : (ok ? "#15803d" : "#dc2626");
+        return `<div style="flex:1;min-width:130px;background:${bg};border:1.5px solid ${bd};border-radius:8px;padding:7px 9px;">
+          <div style="font-size:10.5px;font-weight:800;color:${col};">${num} ${title}</div>
+          <div style="font-size:13px;font-weight:800;margin-top:2px;color:var(--text);">${!c ? "대기" : (ok ? `✓ 수렴 (${iterNo ? `iter ${iterNo}` : "완료"})` : "✗ 미수렴")}</div>
+          <div style="font-size:10.5px;color:var(--muted);margin-top:2px;">${valStr} <span style="opacity:0.75;">(${tolStr})</span></div>
+        </div>`;
+      };
+      const lastH = (c && c.history && c.history.length) ? c.history[c.history.length - 1] : null;
+      const seqStr = (ms && ms.orderSorted && ms.orderSorted.length)
+        ? ms.orderSorted.map(x => `<b>${x.label}</b>(iter ${x.iter})`).join(" → ")
+        : (c ? "미수렴" : "-");
+      const warnList = (c && c.warnings && c.warnings.length) ? c.warnings : [];
+
       container.innerHTML = `<div class="single-layout">
         <div>
           <div class="card">
-            <h2>1. 지배방정식 (보존법칙 — Physics)</h2>
+            <h2>1. 지배방정식 (3대 보존법칙 — Physics)</h2>
             <div class="field"><div class="field-row"><label>해석 루프</label><select id="dtLoopMode" style="width:185px;"><option value="closed" ${p.loop_mode!=='open'?'selected':''}>폐회로 (반복 수렴)</option><option value="open" ${p.loop_mode==='open'?'selected':''}>개회로 (1회 순차 패스)</option></select></div></div>
-            <label class="chk-line"><input type="checkbox" id="dtGovMass" ${p.gov_mass!==false?'checked':''}/> <b>질량보존</b> (유량 연속 + 충전량·액위)</label>
-            <label class="chk-line"><input type="checkbox" id="dtGovEnergy" ${p.gov_energy!==false?'checked':''}/> <b>에너지보존</b> (h_1'=h_1 폐합, P2 자동 탐색)</label>
-            <label class="chk-line"><input type="checkbox" id="dtGovMom" ${p.gov_momentum!==false?'checked':''}/> <b>모멘텀보존</b> (지오메트리 마찰·가속·오리피스 ΔP)</label>
-            <div class="sec-hdr">2. 수치해석 기법 (Numerical Method — How to Solve)</div>
+            <label class="chk-line"><input type="checkbox" id="dtGovMass" ${p.gov_mass!==false?'checked':''}/> <b>① 질량보존</b> (ṁ_comp=ṁ_valve + 충전량 구속)</label>
+            <label class="chk-line"><input type="checkbox" id="dtGovEnergy" ${p.gov_energy!==false?'checked':''}/> <b>② 에너지보존</b> (Q_cond=Q_evap+W_gas, ≤tolE)</label>
+            <label class="chk-line"><input type="checkbox" id="dtGovMom" ${p.gov_momentum!==false?'checked':''}/> <b>③ 모멘텀보존</b> (ΔP_comp = ΣΔP_loop)</label>
+            <div class="sec-hdr">2. 수치해석 기법 &amp; 수렴 허용오차</div>
             <div class="field"><div class="field-row"><label>반복 수렴 알고리즘</label><select id="dtNumMethod" style="width:205px;">
-              <option value="newton_secant" ${p.num_method==='newton_secant'?'selected':''}>준-뉴턴 / 할선법 (Quasi-Newton)</option>
-              <option value="fixed_point" ${p.num_method==='fixed_point'?'selected':''}>고정점 완화법 (Picard)</option>
-              <option value="aitken" ${p.num_method==='aitken'?'selected':''}>Aitken Δ² 가속법</option>
+              <option value="newton_secant" ${p.num_method==='newton_secant'?'selected':''}>전역 Newton-Raphson + Armijo (권장)</option>
+              <option value="fixed_point" ${p.num_method==='fixed_point'?'selected':''}>안정화 고정점 완화 (Chord-Picard)</option>
+              <option value="aitken" ${p.num_method==='aitken'?'selected':''}>표준 Steffensen / Aitken Δ²</option>
             </select></div></div>
             <div class="field"><div class="field-row"><label>최대 반복 횟수 (maxIter)</label><input type="number" id="dtSvMaxIter" value="${p.maxIter}" min="5" max="200" step="5"></div></div>
             <div class="field"><div class="field-row"><label>허용오차 tolT [K] / tolP [bar]</label><div style="display:flex;gap:4px;"><input type="number" id="dtSvTolT" value="${p.tolT}" step="0.01" style="width:56px;"><input type="number" id="dtSvTolP" value="${p.tolP}" step="0.01" style="width:56px;"></div></div></div>
-            <div class="field"><div class="field-row"><label>완화 계수 α (0.1~1.0)</label><input type="number" id="dtSvAlpha" value="${p.alpha}" min="0.1" max="1.0" step="0.05"></div></div>
+            <div class="field"><div class="field-row"><label>허용오차 tolH [kJ/kg] / tolE [%]</label><div style="display:flex;gap:4px;"><input type="number" id="dtSvTolH" value="${p.tolH ?? 0.35}" step="0.05" style="width:56px;"><input type="number" id="dtSvTolE" value="${p.tolE ?? 0.01}" step="0.005" style="width:56px;"></div></div></div>
+            <div class="field"><div class="field-row"><label>완화 계수 α (Picard/Aitken)</label><input type="number" id="dtSvAlpha" value="${p.alpha}" min="0.1" max="1.0" step="0.05"></div></div>
             <button class="primary" id="dtSvRun" style="width:100%;margin-top:8px;">▶ 현재 회로로 솔버 실행</button>
             <button class="green" id="dtSvOpt" style="width:100%;margin-top:6px;">⚡ 완화계수(α) 자동 최적화</button>
           </div>
@@ -613,24 +655,61 @@
         </div>
         <div>
           <div class="kpi-grid">
-            <div class="kpi"><div class="lbl">수렴 상태</div><div class="val" style="color:${c&&c.converged?'var(--green)':'var(--danger)'}">${c?(c.converged?'수렴 완료':'미수렴'):'대기'}</div><div class="sub">${c?`${c.iterations}/${c.maxIter}회`:'-'}</div></div>
-            <div class="kpi"><div class="lbl">ΔT 잔차</div><div class="val" style="color:var(--accent)">${c?c.residualT.toFixed(4)+' K':'-'}</div></div>
-            <div class="kpi"><div class="lbl">ΔP 잔차</div><div class="val" style="color:var(--hot)">${c?c.residualP.toFixed(4)+' bar':'-'}</div></div>
-            <div class="kpi"><div class="lbl">Δh 잔차</div><div class="val" style="color:var(--purple)">${c?c.residualH.toFixed(3)+' kJ/kg':'-'}</div><div class="sub">${c&&c.convergedP2?`P2: ${c.convergedP2.toFixed(2)} bar`:''}</div></div>
+            <div class="kpi"><div class="lbl">최종 수렴 판정</div><div class="val" style="color:${c&&c.converged?'var(--green)':'var(--danger)'}">${c?(c.converged?'✓ 수렴 완료':'✗ 미수렴'):'대기'}</div><div class="sub">${c?`${c.iterations}/${c.maxIter}회 · ${c.secondLawOk?'제2법칙 통과':'⚠️ 제2법칙 위반'}`:'-'}</div></div>
+            <div class="kpi"><div class="lbl">솔버 ΔT / ΔP 잔차</div><div class="val" style="color:var(--accent);font-size:14px;">${c?`${c.residualT.toFixed(4)}K / ${c.residualP.toFixed(4)}b`:'-'}</div><div class="sub">‖R‖∞ = ${c&&c.residualNorm!==undefined?c.residualNorm.toExponential(2):'-'}</div></div>
+            <div class="kpi"><div class="lbl">솔버 Δh / 에너지 잔차</div><div class="val" style="color:var(--purple);font-size:14px;">${c?`${c.residualH.toFixed(4)} kJ/kg`:'-'}</div><div class="sub">${cons?`ΔE ${cons.energy.residual_pct.toFixed(4)}%`:''}</div></div>
+            <div class="kpi"><div class="lbl">운전 압력 (P1 / P2)</div><div class="val" style="color:var(--hot);font-size:14px;">${c&&c.convergedP2?`${(c.convergedP1||0).toFixed(2)} / ${c.convergedP2.toFixed(2)} b`:'-'}</div><div class="sub">${cons?`COP_comp ${cons.energy.COP_comp.toFixed(2)} | sys ${cons.energy.COP_sys.toFixed(2)}`:''}</div></div>
           </div>
+
           <div class="card">
-            <h2>3대 보존법칙 검증 리포트</h2>
-            <div style="font-size:12.5px;line-height:1.85;">${c && c.conservation ? (() => {
-              const m = c.conservation.mass, en = c.conservation.energy, mo = c.conservation.momentum;
-              return `• <b>질량보존 (${m.charge_mode==='auto'?'자동':'수동'})</b>: 총 <b>${m.total_g.toFixed(1)} g</b> / 목표 <b>${m.target_g.toFixed(1)} g</b> (잔차 ${m.residual_g.toFixed(1)} g) — HX ${m.hx_g.toFixed(0)}g + 탱크 ${m.rec_g.toFixed(0)}g + 배관 ${m.pipe_g.toFixed(0)}g + 압축기 ${m.comp_g.toFixed(0)}g<br>
-              • <b>에너지보존</b>: 방열 Q_cond <b>${en.Q_cond.toFixed(2)} kW</b> vs (Q_evap <b>${en.Q_evap.toFixed(2)} kW</b> + W_gas <b>${en.W_gas.toFixed(2)} kW</b>) → 잔차 <b>${en.residual_kW.toFixed(3)} kW (${en.residual_pct.toFixed(2)}%)</b><br>
-              • <b>모멘텀보존</b>: 압축기 ΔP <b>${mo.dP_comp_bar.toFixed(3)} bar</b> vs 회로 ΣΔP <b>${mo.dP_loop_bar.toFixed(3)} bar</b> → 잔차 <b>${mo.residual_bar.toFixed(4)} bar</b>`;
+            <h2>보존법칙(질량·에너지·모멘텀) → 솔버 잔차 수렴 단계 추적</h2>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+              ${pillStage("①", "질량보존", lastH?.massOk, ms?.massIter, cons ? `유량 ${cons.mass.flow_residual_pct.toFixed(4)}% · 충전 ${cons.mass.residual_g.toFixed(1)}g` : "-", "≤0.1%")}
+              ${pillStage("②", "에너지보존", lastH?.energyOk, ms?.energyIter, cons ? `ΔE ${cons.energy.residual_pct.toFixed(4)}% (${cons.energy.residual_kW.toFixed(4)}kW)` : "-", `≤${p.tolE??0.01}%`)}
+              ${pillStage("③", "모멘텀보존", lastH?.momOk, ms?.momentumIter, cons ? `ΔP_err ${cons.momentum.residual_bar.toFixed(5)} bar` : "-", `≤${p.tolP}b`)}
+              ${pillStage("④", "최종 솔버 잔차", c?.converged, ms?.solverResIter, c ? `‖R‖∞ ${(c.residualNorm||0).toExponential(2)}` : "-", "≤1e-3 & 2ndLaw")}
+            </div>
+            <div style="font-size:12px;background:var(--panel-dark);border:1px solid var(--border);border-radius:6px;padding:6px 10px;margin-bottom:8px;">
+              <b>실측 수렴 순서:</b> ${seqStr}
+              <span style="color:var(--muted);margin-left:8px;">(4×4 전역 Newton 동시 결합 풀이: 3대 보존법칙 + 제2법칙이 모두 만족될 때 최종 솔버 수렴 확정)</span>
+            </div>
+            <div style="font-size:12px;line-height:1.75;">${cons ? (() => {
+              const m = cons.mass, en = cons.energy, mo = cons.momentum;
+              return `• <b>① 질량보존 (${m.charge_mode==='auto'?'자동 산정':'수동 구속'})</b>: 유량 ṁ_comp <b>${m.m_comp_kgs.toFixed(5)}</b> vs ṁ_valve <b>${m.m_valve_kgs.toFixed(5)} kg/s</b> (오차 <b>${m.flow_residual_pct.toFixed(4)}%</b>) | 충전량 <b>${m.total_g.toFixed(1)} g</b> / 목표 <b>${m.target_g.toFixed(1)} g</b> (잔차 ${m.residual_g.toFixed(2)} g — HX ${m.hx_g.toFixed(0)}g + 탱크 ${m.rec_g.toFixed(0)}g + 배관 ${m.pipe_g.toFixed(0)}g + 압축기 ${m.comp_g.toFixed(0)}g)<br>
+              • <b>② 에너지보존 (1st &amp; 2nd Law)</b>: Q_cond <b>${en.Q_cond.toFixed(3)} kW</b> vs (Q_evap <b>${en.Q_evap.toFixed(3)}</b> + W_gas,net <b>${en.W_gas_net.toFixed(3)} kW</b>, 쉘손실 ${en.Q_shell.toFixed(3)} kW) → 잔차 <b>${en.residual_kW.toFixed(4)} kW (${en.residual_pct.toFixed(4)}%)</b> | 제2법칙: <b style="color:${en.secondLawOk?'var(--green)':'var(--danger)'}">${en.secondLawOk?'통과 (온도교차 없음)':'위반 감지'}</b><br>
+              • <b>③ 모멘텀보존</b>: 압축기 ΔP <b>${mo.dP_comp_bar.toFixed(4)} bar</b> vs 회로 ΣΔP <b>${mo.dP_loop_bar.toFixed(4)} bar</b> → 잔차 <b>${mo.residual_bar.toFixed(5)} bar</b>`;
             })() : "시뮬레이션을 실행하면 보존법칙 검증 결과가 표시됩니다."}</div>
+            ${warnList.length ? `<div style="margin-top:8px;padding:7px 10px;background:#fef3c7;border:1px solid #f59e0b;border-radius:6px;font-size:11.5px;color:#92400e;"><b>⚠️ 물리·범위 경고 (${warnList.length}건):</b><br>${warnList.slice(0, 6).map(w => `• ${w}`).join("<br>")}</div>` : ""}
           </div>
-          <div class="card" style="height:310px;display:flex;flex-direction:column;">
-            <h2>반복 횟수별 잔차 수렴 곡선 (ΔT, Δh, ΔP)</h2>
-            <div style="flex:1;min-height:0;"><canvas id="dtSolverCanvas" style="width:100%;height:100%;display:block;"></canvas></div>
+
+          <div class="grid-2">
+            <div class="card" style="height:260px;display:flex;flex-direction:column;margin-bottom:10px;">
+              <h2>① 3대 보존법칙 잔차 수렴 곡선 (질량·에너지·모멘텀)</h2>
+              <div style="flex:1;min-height:0;"><canvas id="dtConsCanvas" style="width:100%;height:100%;display:block;"></canvas></div>
+            </div>
+            <div class="card" style="height:260px;display:flex;flex-direction:column;margin-bottom:10px;">
+              <h2>② 솔버 잔차 수렴 곡선 (ΔT, Δh, ΔP, ‖R‖∞)</h2>
+              <div style="flex:1;min-height:0;"><canvas id="dtSolverCanvas" style="width:100%;height:100%;display:block;"></canvas></div>
+            </div>
           </div>
+
+          ${c && c.history && c.history.length ? `<div class="card">
+            <h2>반복 횟수별 수렴 이력 테이블 (질량 → 에너지 → 모멘텀 → 솔버 잔차)</h2>
+            <div style="max-height:210px;overflow-y:auto;">
+              <table class="pt-table" style="margin-top:4px;font-size:11px;">
+                <thead><tr><th>Iter</th><th>P1[b]</th><th>P2[b]</th><th>질량[%]</th><th>에너지[%]</th><th>모멘텀[b]</th><th>ΔT[K]</th><th>Δh[kJ/kg]</th><th>‖R‖∞</th><th>상태 (M·E·Mo·S)</th></tr></thead>
+                <tbody>${c.history.map(h => `<tr>
+                  <td style="text-align:center;">${h.iter}</td>
+                  <td>${h.P1.toFixed(3)}</td><td>${h.P2.toFixed(2)}</td>
+                  <td style="color:${h.massOk?'var(--green)':'inherit'};font-weight:${h.massOk?700:400};">${h.resMassFlow_pct.toFixed(3)}</td>
+                  <td style="color:${h.energyOk?'var(--green)':'inherit'};font-weight:${h.energyOk?700:400};">${h.resE_pct.toFixed(4)}</td>
+                  <td style="color:${h.momOk?'var(--green)':'inherit'};font-weight:${h.momOk?700:400};">${h.resMom_bar.toFixed(4)}</td>
+                  <td>${h.resT.toFixed(4)}</td><td>${h.resH.toFixed(4)}</td><td>${(h.resNorm||0).toExponential(1)}</td>
+                  <td style="text-align:center;font-weight:700;">${h.massOk?'🟢':'⚪'}${h.energyOk?'🟢':'⚪'}${h.momOk?'🟢':'⚪'}→${(h.massOk&&h.energyOk&&h.momOk&&h.solverResOk)?'✅':'⏳'}</td>
+                </tr>`).join("")}</tbody>
+              </table>
+            </div>
+          </div>` : ""}
         </div>
       </div>`;
       q("#dtLoopMode").onchange = e => { p.loop_mode = e.target.value; onParamChange(true); };
@@ -638,10 +717,11 @@
       q("#dtGovEnergy").onchange = e => { p.gov_energy = e.target.checked; onParamChange(true); };
       q("#dtGovMom").onchange = e => { p.gov_momentum = e.target.checked; onParamChange(true); };
       q("#dtNumMethod").onchange = e => { p.num_method = e.target.value; onParamChange(true); };
-      ["#dtSvMaxIter:maxIter","#dtSvTolT:tolT","#dtSvTolP:tolP","#dtSvAlpha:alpha"].forEach(s => { const [id, k] = s.split(":"); q(id).oninput = e => { p[k] = +e.target.value; onParamChange(false); }; });
+      ["#dtSvMaxIter:maxIter","#dtSvTolT:tolT","#dtSvTolP:tolP","#dtSvTolH:tolH","#dtSvTolE:tolE","#dtSvAlpha:alpha"].forEach(s => { const [id, k] = s.split(":"); q(id).oninput = e => { p[k] = +e.target.value; onParamChange(false); }; });
       q("#dtSvRun").onclick = () => onSolverAction("run");
       q("#dtSvOpt").onclick = () => onSolverAction("optimize");
       if (c && ctx.drawSolverChart) ctx.drawSolverChart(c.history, "dtSolverCanvas");
+      if (c && ctx.drawConservationChart) ctx.drawConservationChart(c.history, "dtConsCanvas");
       return;
     }
 
@@ -660,18 +740,19 @@
           <div class="card">
             <h2>❄️ ${node.modelName} — 작동 유체(냉매/2차유체) &amp; 충전량 설정</h2>
             <div class="field"><div class="field-row"><label>유체 종류 (냉매 / Air / Water / GW)</label><select id="dtRefFluid" style="width:160px;">${allFluids.map(k => `<option value="${k}" ${k===p.fluid?"selected":""}>${k}</option>`).join("")}</select></div></div>
-            <div class="field"><div class="field-row"><label>충전량 결정 방식</label><select id="dtChargeMode" style="width:160px;"><option value="auto" ${p.charge_mode==='auto'?'selected':''}>자동 계산 (Auto)</option><option value="manual" ${p.charge_mode!=='auto'?'selected':''}>수동 입력 (Manual)</option></select></div></div>
+            <div class="field"><div class="field-row"><label>충전량 결정 방식</label><select id="dtChargeMode" style="width:160px;"><option value="auto" ${p.charge_mode==='auto'?'selected':''}>자동 산정 (설계 SC 기준)</option><option value="manual" ${p.charge_mode!=='auto'?'selected':''}>수동 구속 (ΣM = M_charge)</option></select></div></div>
             ${p.charge_mode === "auto"
-              ? `<div class="field"><div class="field-row"><label>목표 탱크 액위 [%]</label><input type="number" id="dtAutoLv" value="${p.auto_rec_level_pct ?? 40}" min="10" max="90" step="5"></div></div>`
+              ? `<div class="field"><div class="field-row"><label>목표 탱크 액위 [%]</label><input type="number" id="dtAutoLv" value="${p.auto_rec_level_pct ?? 40}" min="10" max="90" step="5"></div></div>
+                 <div class="field"><div class="field-row"><label>설계 응축 과냉도 SC [K]</label><input type="number" id="dtAutoSc" value="${p.auto_sc_K ?? 5.0}" min="0" max="20" step="0.5"></div></div>`
               : `<div class="field"><div class="field-row"><label>수동 냉매 충전량 [g]</label><input type="number" id="dtChargeG" value="${p.charge_g ?? 650}" min="50" max="5000" step="25"></div></div>`}
-            <div class="res-box"><h3>현재 냉매 보유량 분포</h3>${consMass ? `총 충전량: <b style="color:var(--accent)">${consMass.total_g.toFixed(1)} g</b> (${consMass.charge_mode==='auto'?'자동':'수동'})<br>• HX: <b>${consMass.hx_g.toFixed(1)} g</b> | 탱크: <b>${consMass.rec_g.toFixed(1)} g</b> | 배관: <b>${consMass.pipe_g.toFixed(1)} g</b> | 압축기: <b>${consMass.comp_g.toFixed(1)} g</b>` : "실행 후 표시됩니다."}</div>
+            <div class="res-box"><h3>현재 냉매 보유량 분포</h3>${consMass ? `총 충전량: <b style="color:var(--accent)">${consMass.total_g.toFixed(1)} g</b> (${consMass.charge_mode==='auto'?'자동':'수동 구속'}, 잔차 ${consMass.residual_g.toFixed(2)}g)<br>• HX: <b>${consMass.hx_g.toFixed(1)} g</b> | 탱크: <b>${consMass.rec_g.toFixed(1)} g</b> | 배관: <b>${consMass.pipe_g.toFixed(1)} g</b> | 압축기: <b>${consMass.comp_g.toFixed(1)} g</b>` : "실행 후 표시됩니다."}</div>
           </div>
           <div class="card">
-            <h2>📐 자동 충전량(Auto Charge) 계산 방식 상세</h2>
+            <h2>📐 충전량 결합 &amp; 물성 보간 엔진 (log(P) PCHIP · DB ${global.FluidPropModule.FLUID_DB_VERSION})</h2>
             <div style="font-size:12px;line-height:1.7;">
-              <b>1. 열교환기 6-세그먼트 Zivi 기공률 적분</b>: 슬립비 <code>S=(ρ_f/ρ_g)^(1/3)</code> 기반 2상 밀도 <code>ρ_2ph = α·ρ_g + (1-α)·ρ_f</code>를 체적 적분합니다.<br>
-              <b>2. 어큐뮬레이터/리시버 목표 액위</b>: 목표 액위(<code>f_lv</code>)에 해당하는 <code>V_tank·(f_lv·ρ_f + (1-f_lv)·ρ_g)</code>를 배정합니다.<br>
-              <b>3. 배관 및 압축기 합산</b>: 배관(<code>60cc/ea × ρ</code>)과 압축기(<code>2.5·Vd × ρ_avg</code>)를 합산해 <code>M_auto</code>를 결정합니다.
+              <b>1. 자동 산정(Auto)</b>: 설계 과냉도 <code>SC_target</code>(고압리시버 시 0.5K, 일반 5.0K)에서 20-세그먼트 HX(Zivi)·배관(Zivi)·압축기 보유량과 탱크 목표 액위를 합산해 필요 충전량을 산출합니다.<br>
+              <b>2. 수동 구속(Manual)</b>: 전역 뉴턴 방정식 <code>ΣM_i(P1,P2,h1,P4) = M_charge</code>을 직접 풀어 충전량 변화가 P2·과냉도·액위·COP에 물리적으로 반영됩니다.<br>
+              <b>3. 물성 정밀도</b>: 포화선은 <code>log(P)</code> 축 단조 3차 스플라인(PCHIP)으로 보간하며 범위 초과 시 경고를 표시합니다.
             </div>
           </div>
         </div>
@@ -700,6 +781,7 @@
       q("#dtRefFluid").onchange = e => { p.fluid = e.target.value; p.editFluid = e.target.value; onParamChange(true); };
       q("#dtChargeMode").onchange = e => { p.charge_mode = e.target.value; onParamChange(true); };
       const lvEl = q("#dtAutoLv"); if (lvEl) lvEl.oninput = e => { p.auto_rec_level_pct = +e.target.value || 40; onParamChange(false); };
+      const scEl = q("#dtAutoSc"); if (scEl) scEl.oninput = e => { p.auto_sc_K = Math.max(0, +e.target.value || 0); onParamChange(false); };
       const cgEl = q("#dtChargeG"); if (cgEl) cgEl.oninput = e => { p.charge_g = +e.target.value || 650; onParamChange(false); };
       q("#dtLookupFluid").onchange = e => { p.editFluid = e.target.value; onFluidAction("refreshTab", node); };
       q("#dtResetCp").onclick = () => onFluidAction("resetCoolprop", node);
@@ -716,7 +798,7 @@
       return;
     }
 
-    // 3) 팽창밸브 상세 탭 (오리피스 지름 D 무제한 애니메이션 + 지름연동 가변 Cd + 초크 플로우 선택)
+    // 3) 팽창밸브 상세 탭 (연결 유체 실제 물성 미리보기 + ΔP→ṁ 역방향 유량 + 진성 HEM 초크)
     if (node.type === "valve") {
       const p = node.params;
       const D_mm = Math.max(0.4, Number(p.orifice_D_mm) || 2.8);
@@ -724,7 +806,13 @@
       const flowCorr = p.flow_corr || "re_diam_cd";
       const sensors = nodes.filter(x => global.SolverModule.isSensorType(x.type));
       const VM = global.ValveModule;
-      const liveCd = VM ? VM.calcEffectiveCd(p, D_mm, 1120, 150, 0.08, A_max * 0.5e-6, 4.0) : (p.Cd || 0.65);
+      const fNode = refNodes.find(r => r.id === p.fluidNodeId) || refNodes[0];
+      const fProp = fNode && fluidTableDB ? fluidTableDB[fNode.params.fluid] : null;
+      node._previewFluidProp = fProp;
+      let prevRho = 1120, prevMu = 150;
+      if (node.result && node.result.inlet) { prevRho = node.result.inlet.rho; prevMu = node.result.inlet.mu; }
+      else if (fProp && fProp.sat) { const sp = fProp.getSatAtP(Math.min(12.5, fProp.sat.P[fProp.sat.P.length - 1] * 0.8)); prevRho = sp.rho_f; prevMu = sp.mu_f; }
+      const liveCd = VM ? VM.calcEffectiveCd(p, D_mm, prevRho, prevMu, node.result ? node.result.inlet.m_dot : 0.08, A_max * 0.5e-6, node.result ? node.result.inlet.SC : 5.0) : (p.Cd || 0.65);
 
       container.innerHTML = `<div class="single-layout">
         <div>
@@ -776,7 +864,7 @@
         if (el) el.oninput = e => {
           p[k] = +e.target.value;
           const cdDisp = q("#dtVCdEffDisp");
-          if (cdDisp && VM) cdDisp.textContent = VM.calcEffectiveCd(p, p.orifice_D_mm || 2.8, 1120, 150, 0.08, 1.5e-6, 4.0).toFixed(3);
+          if (cdDisp && VM) cdDisp.textContent = VM.calcEffectiveCd(p, p.orifice_D_mm || 2.8, prevRho, prevMu, node.result ? node.result.inlet.m_dot : 0.08, ((Math.PI * (p.orifice_D_mm || 2.8) * (p.orifice_D_mm || 2.8)) / 4) * 0.5e-6, 5.0).toFixed(3);
           onParamChange(false);
         };
       });
@@ -789,23 +877,26 @@
       bindPair("#dtVOpen", "#dtVOpenRange", "opening_pct");
       bindPair("#dtVDiam", "#dtVDiamRange", "orifice_D_mm", d => {
         const aEl = q("#dtVAreaDisp"); if (aEl) aEl.textContent = ((Math.PI * d * d) / 4).toFixed(3) + " mm²";
-        const cdDisp = q("#dtVCdEffDisp"); if (cdDisp && VM) cdDisp.textContent = VM.calcEffectiveCd(p, d, 1120, 150, 0.08, (Math.PI * d * d / 4) * 0.5e-6, 4.0).toFixed(3);
+        const cdDisp = q("#dtVCdEffDisp"); if (cdDisp && VM) cdDisp.textContent = VM.calcEffectiveCd(p, d, prevRho, prevMu, node.result ? node.result.inlet.m_dot : 0.08, (Math.PI * d * d / 4) * 0.5e-6, 5.0).toFixed(3);
       });
       return;
     }
 
-    // 4) 압축기 상세 탭
+    // 4) 압축기 상세 탭 (쌍선형 보간 · 쉘 열손실 f_Q · 모터효율 η_motor · AHRI 540 옵션)
     if (node.type === "compressor") {
       const p = node.params, tabKey = p._csvTab || "is";
+      const cModel = p.comp_model || "eff_map";
       container.innerHTML = `<div class="single-layout">
         <div><div class="card"><h2>⚙️ ${node.modelName} — 상세 모델링</h2>${fluidSelectHTML(node)}${sigSelectHTML(node, "RPM 제어 신호 컴포넌트")}
+          <div class="field"><div class="field-row"><label>압축기 모델</label><select id="dtCModel" style="width:170px;"><option value="eff_map" ${cModel==='eff_map'?'selected':''}>2D 효율맵 (쌍선형 보간)</option><option value="ahri540" ${cModel==='ahri540'?'selected':''}>AHRI 540 10계수 + SH보정</option></select></div></div>
           <label class="chk-line"><input type="checkbox" id="dtCLink" ${p.link_global!==false?'checked':''}/> 전역 압축기 RPM 연동 (${simConfig.comp_rpm} RPM)</label>
           <div class="field"><div class="field-row"><label>초기 입구압 P1 [bar]</label><input type="number" id="dtCP1" value="${p.P1_bar}" step="0.1"></div></div>
           <div class="field"><div class="field-row"><label>초기 출구압 P2 [bar]</label><input type="number" id="dtCP2" value="${p.P2_bar}" step="0.2"></div></div>
           <div class="field"><div class="field-row"><label>초기 입구온도 T1 [°C]</label><input type="number" id="dtCT1" value="${p.T1_C}" step="0.5"></div></div>
           <div class="field"><div class="field-row"><label>개별 회전수 [RPM]</label><input type="number" id="dtCRpm" value="${p.rpm}" step="100" ${p.link_global!==false?'disabled':''}></div></div>
           <div class="field"><div class="field-row"><label>배기량 Vd [cc/rev]</label><input type="number" id="dtCVd" value="${p.vd_cc}" step="5"></div></div>
-          <div class="sec-hdr">효율맵 2D CSV (PR, RPM, eff)</div>
+          <div class="field"><div class="field-row"><label>쉘 열손실 f_Q / 모터효율 η_m</label><div style="display:flex;gap:4px;"><input type="number" id="dtCFq" value="${p.f_Q ?? 0.05}" step="0.01" min="0" max="0.35" style="width:56px;"><input type="number" id="dtCEtaM" value="${p.eta_motor ?? 0.92}" step="0.01" min="0.5" max="1.0" style="width:56px;"></div></div></div>
+          <div class="sec-hdr">효율맵 2D CSV (PR, RPM, eff — 정규격자 쌍선형 보간)</div>
           <div class="sub-tabs" id="dtCCsvTabs"><button class="sub-btn ${tabKey==='is'?'active':''}" data-t="is">η_is</button><button class="sub-btn ${tabKey==='vol'?'active':''}" data-t="vol">η_v</button><button class="sub-btn ${tabKey==='mech'?'active':''}" data-t="mech">η_m</button></div>
           <textarea id="dtCCsv">${p["csv_" + tabKey]}</textarea><button class="primary sm" id="dtCApplyCsv" style="width:100%;margin-top:4px;">효율맵 적용</button>
         </div></div>
@@ -815,54 +906,54 @@
         </div>
       </div>`;
       const fSel = q("#dtFluidNode"); if (fSel) fSel.onchange = e => { p.fluidNodeId = e.target.value; onParamChange(true); };
-      const gSel = q("#dtSigNode"); if (gSel) gSel.onchange = e => { p.sigNodeId = e.target.value; onParamChange(true); };
+      q("#dtCModel").onchange = e => { p.comp_model = e.target.value; onParamChange(true); };
       q("#dtCLink").onchange = e => { p.link_global = e.target.checked; onParamChange(true); };
-      ["#dtCP1:P1_bar","#dtCP2:P2_bar","#dtCT1:T1_C","#dtCRpm:rpm","#dtCVd:vd_cc"].forEach(s => { const [id, k] = s.split(":"); q(id).oninput = e => { p[k] = +e.target.value; onParamChange(false); }; });
+      ["#dtCP1:P1_bar","#dtCP2:P2_bar","#dtCT1:T1_C","#dtCRpm:rpm","#dtCVd:vd_cc","#dtCFq:f_Q","#dtCEtaM:eta_motor"].forEach(s => { const [id, k] = s.split(":"); q(id).oninput = e => { p[k] = +e.target.value; onParamChange(false); }; });
       container.querySelectorAll("#dtCCsvTabs .sub-btn").forEach(b => b.onclick = () => { p._csvTab = b.dataset.t; onFluidAction("refreshTab", node); });
       q("#dtCApplyCsv").onclick = () => { p["csv_" + tabKey] = q("#dtCCsv").value; onParamChange(true); };
       return;
     }
 
-    // 5) 핀-플레이트 / 판형 열교환기 상세 탭
+    // 5) 핀-플레이트 / 판형 열교환기 상세 탭 (20-세그먼트 · Chang-Wang 8항 · 진성 역류 · Amalfi 2016 · Kim-Mudawar 2013)
     if (global.SolverModule.isHxType(node.type)) {
       const p = node.params;
       const isPlate = node.type === "hx_plate" || p.hxType === "plate";
       const finType = p.fin_type || "louver";
       const condCorr = p.ref_cond_corr || "shah_cond";
-      const evapCorr = p.ref_evap_corr || "yan_lin";
-      const secPheCorr = p.sec_phe_corr || "muley_manglik";
-      const fans = nodes.filter(x => x.type === "fan");
+      const evapCorr = p.ref_evap_corr || "han_lee_kim";
+      const secPheCorr = p.sec_phe_corr || "martin";
 
       const corrSectionHTML = isPlate ? `
-        <div class="sec-hdr">판형(PHX) 열전달 상관식 &amp; 보정계수</div>
-        <div class="field"><div class="field-row"><label>냉매 증발 상관식 ${helpBtnHTML(evapCorr)}</label><select id="dtHEvapCorr" style="width:155px;"><option value="yan_lin" ${evapCorr==='yan_lin'?'selected':''}>Yan &amp; Lin (1999)</option><option value="han_lee_kim" ${evapCorr==='han_lee_kim'?'selected':''}>Han-Lee-Kim (2003)</option><option value="hsieh_lin" ${evapCorr==='hsieh_lin'?'selected':''}>Hsieh &amp; Lin (2002)</option><option value="dittus" ${evapCorr==='dittus'?'selected':''}>Dittus-Boelter</option></select></div></div>
-        <div class="field"><div class="field-row"><label>냉매 응축 상관식 ${helpBtnHTML(condCorr)}</label><select id="dtHCondCorr" style="width:155px;"><option value="shah_cond" ${condCorr==='shah_cond'?'selected':''}>Shah 응축 상관식</option><option value="cavallini" ${condCorr==='cavallini'?'selected':''}>Cavallini-Zecchin</option><option value="dittus" ${condCorr==='dittus'?'selected':''}>Dittus-Boelter</option></select></div></div>
-        <div class="field"><div class="field-row"><label>상대측(단상) 상관식 ${helpBtnHTML(secPheCorr)}</label><select id="dtHSecCorr" style="width:155px;"><option value="muley_manglik" ${secPheCorr==='muley_manglik'?'selected':''}>Muley-Manglik (1999)</option><option value="martin" ${secPheCorr==='martin'?'selected':''}>Martin Lévêque (1996)</option></select></div></div>
+        <div class="sec-hdr">판형(PHX) 열전달 상관식 (20-세그먼트 진성 역류)</div>
+        <div class="field"><div class="field-row"><label>냉매 증발 상관식 ${helpBtnHTML(evapCorr)}</label><select id="dtHEvapCorr" style="width:160px;"><option value="han_lee_kim" ${evapCorr==='han_lee_kim'?'selected':''}>Han-Lee-Kim (2003, 권장)</option><option value="amalfi_2016" ${evapCorr==='amalfi_2016'?'selected':''}>Amalfi et al. (2016)</option><option value="hsieh_lin" ${evapCorr==='hsieh_lin'?'selected':''}>Hsieh &amp; Lin (2002)</option><option value="yan_lin" ${evapCorr==='yan_lin'?'selected':''}>Yan &amp; Lin (1999 원식)</option><option value="dittus" ${evapCorr==='dittus'?'selected':''}>Gnielinski/Dittus</option></select></div></div>
+        <div class="field"><div class="field-row"><label>냉매 응축 상관식 ${helpBtnHTML(condCorr)}</label><select id="dtHCondCorr" style="width:160px;"><option value="shah_cond" ${condCorr==='shah_cond'?'selected':''}>Shah (1979/2009)</option><option value="cavallini" ${condCorr==='cavallini'?'selected':''}>Cavallini-Zecchin</option><option value="kim_mudawar" ${condCorr==='kim_mudawar'?'selected':''}>Kim-Mudawar (2013)</option><option value="dittus" ${condCorr==='dittus'?'selected':''}>Gnielinski/Dittus</option></select></div></div>
+        <div class="field"><div class="field-row"><label>상대측(단상) 상관식 ${helpBtnHTML(secPheCorr)}</label><select id="dtHSecCorr" style="width:160px;"><option value="martin" ${secPheCorr==='martin'?'selected':''}>Martin (1996, 층류~난류 권장)</option><option value="muley_manglik" ${secPheCorr==='muley_manglik'?'selected':''}>Muley-Manglik (Re≥1000)</option></select></div></div>
         <div class="field"><div class="field-row"><label>보정계수 C_ref / C_sec</label><div style="display:flex;gap:4px;"><input type="number" id="dtHCref" value="${p.ref_corr_C ?? 1.0}" step="0.05" style="width:54px;"><input type="number" id="dtHCsec" value="${p.sec_corr_C ?? 1.0}" step="0.05" style="width:54px;"></div></div></div>`
       : `
-        <div class="sec-hdr">핀-플레이트 상관식 (공기측 · 냉매측)</div>
-        <div class="field"><div class="field-row"><label>핀 형상 &amp; 공기측 식 ${helpBtnHTML(finType==='flat'?'wang_flat':'chen_louver')}</label><select id="dtHFinType" style="width:155px;"><option value="louver" ${finType==='louver'?'selected':''}>루버 핀 (Chen/Chang-Wang)</option><option value="flat" ${finType==='flat'?'selected':''}>플랫 핀 (Wang-Chi)</option></select></div></div>
-        ${finType === "louver" ? `<div class="field"><div class="field-row"><label>루버 피치 Lp [mm] / 각도 θ [°]</label><div style="display:flex;gap:4px;"><input type="number" id="dtHLp" value="${p.louver_pitch_mm ?? 1.2}" step="0.1" style="width:54px;"><input type="number" id="dtHLa" value="${p.louver_angle_deg ?? 27}" step="1" style="width:54px;"></div></div></div>` : ""}
-        <div class="field"><div class="field-row"><label>공기측 j-계수 C_j</label><input type="number" id="dtHCj" value="${p.fin_Cj ?? (finType==='flat'?0.145:0.267)}" step="0.01"></div></div>
-        <div class="field"><div class="field-row"><label>냉매 응축 상관식 ${helpBtnHTML(condCorr)}</label><select id="dtHCondCorr" style="width:155px;"><option value="shah_cond" ${condCorr==='shah_cond'?'selected':''}>Shah 응축 상관식</option><option value="cavallini" ${condCorr==='cavallini'?'selected':''}>Cavallini-Zecchin</option><option value="dittus" ${condCorr==='dittus'?'selected':''}>Dittus-Boelter</option></select></div></div>
+        <div class="sec-hdr">핀-플레이트 상관식 (20-세그먼트 직교류 · Chang-Wang 8항)</div>
+        <div class="field"><div class="field-row"><label>핀 형상 &amp; 공기측 식 ${helpBtnHTML(finType==='flat'?'wang_flat':'chen_louver')}</label><select id="dtHFinType" style="width:160px;"><option value="louver" ${finType==='louver'?'selected':''}>루버 핀 (Chang-Wang 1997/2000)</option><option value="flat" ${finType==='flat'?'selected':''}>플랫 핀 (Wang-Chi)</option></select></div></div>
+        ${finType === "louver" ? `<div class="field"><div class="field-row"><label>루버 피치 Lp [mm] / 각도 θ [°]</label><div style="display:flex;gap:4px;"><input type="number" id="dtHLp" value="${p.louver_pitch_mm ?? 1.2}" step="0.1" style="width:54px;"><input type="number" id="dtHLa" value="${p.louver_angle_deg ?? 27}" step="1" style="width:54px;"></div></div></div>
+        <div class="field"><div class="field-row"><label>공기측 j 배수 C_tune (기본 1.0)</label><input type="number" id="dtHCjMult" value="${p.fin_Cj_mult ?? 1.0}" step="0.05" min="0.2" max="3.0"></div></div>`
+        : `<div class="field"><div class="field-row"><label>플랫핀 j-계수 C_j</label><input type="number" id="dtHCjFlat" value="${p.fin_Cj_flat ?? 0.145}" step="0.01"></div></div>`}
+        <div class="field"><div class="field-row"><label>냉매 응축 상관식 ${helpBtnHTML(condCorr)}</label><select id="dtHCondCorr" style="width:160px;"><option value="shah_cond" ${condCorr==='shah_cond'?'selected':''}>Shah (1979/2009)</option><option value="kim_mudawar" ${condCorr==='kim_mudawar'?'selected':''}>Kim-Mudawar (2013, Dh≤2.5mm)</option><option value="cavallini" ${condCorr==='cavallini'?'selected':''}>Cavallini-Zecchin</option><option value="dittus" ${condCorr==='dittus'?'selected':''}>Gnielinski/Dittus</option></select></div></div>
         <div class="field"><div class="field-row"><label>냉매측 보정계수 C_ref</label><input type="number" id="dtHCref" value="${p.ref_corr_C ?? 1.0}" step="0.05"></div></div>`;
 
       container.innerHTML = `<div class="single-layout">
         <div>
           <div class="card">
-            <h2>🌡️ ${node.modelName} (${isPlate ? "판형 PHX" : "핀-플레이트"})</h2>
+            <h2>🌡️ ${node.modelName} (${isPlate ? "판형 PHX · 역류" : "핀-플레이트 · 직교류"})</h2>
             ${fluidSelectHTML(node)}
             <div class="field"><div class="field-row"><label>열전달 모델</label><select id="dtHMethod" style="width:170px;">
-              <option value="GEO" ${p.method==='GEO'?'selected':''}>지오메트리 + 상관식 (6-Zone)</option>
-              <option value="UA" ${p.method==='UA'?'selected':''}>UA 직접 입력</option>
-              <option value="NTU" ${p.method==='NTU'?'selected':''}>NTU 직접 입력</option>
+              <option value="GEO" ${p.method==='GEO'?'selected':''}>지오메트리 + 상관식 (20-Zone)</option>
+              <option value="UA" ${p.method==='UA'?'selected':''}>UA 직접 입력 (20-Zone)</option>
+              <option value="NTU" ${p.method==='NTU'?'selected':''}>NTU 직접 입력 (20-Zone)</option>
             </select></div></div>
             ${corrSectionHTML}
             <div class="sec-hdr">상대측 유체 &amp; 열원 조건</div>
             <div class="field"><div class="field-row"><label>상대측 유체</label><select id="dtHSecF"><option value="Air" ${p.sec_fluid==='Air'?'selected':''}>Air</option><option value="Water" ${p.sec_fluid==='Water'?'selected':''}>Water</option><option value="GW" ${p.sec_fluid==='GW'?'selected':''}>GW (50%)</option></select></div></div>
             <div class="field"><div class="field-row"><label>열원 모드</label><select id="dtHSecM"><option value="fluid_temp" ${p.sec_mode!=='const_Q'?'selected':''}>유체 온도·유량</option><option value="const_Q" ${p.sec_mode==='const_Q'?'selected':''}>고정 열부하 Q (신호 입력)</option></select></div></div>
             ${p.sec_mode === "const_Q"
-              ? `${sigSelectHTML(node, "열부하 Q [kW] 신호 소스")}<div style="font-size:11px;color:var(--warn);margin-bottom:6px;">※ 고정 열부하 모드는 캔버스에서 신호 컴포넌트(상수/계단/시나리오)를 선으로 직접 연결해야 실행됩니다.</div>`
+              ? `${sigSelectHTML(node, "열부하 Q [kW] 신호 소스")}<div style="font-size:11px;color:var(--warn);margin-bottom:6px;">※ 고정 열부하 모드는 캔버스에서 신호 컴포넌트를 선으로 연결해야 실행됩니다.</div>`
               : `${!isPlate ? `<div class="field"><div class="field-row"><label>공기측 부착 팬(Fan)</label><b style="color:#0891b2;font-size:11.5px;">${(() => { const fn = global.SolverModule.findConnectedFan(node, nodes, edges); return fn ? `🌀 ${fn.modelName} (포트 직결됨)` : "⚠️ 미연결 (상/하 공기포트에 팬 연결 필수)"; })()}</b></div></div>` : ""}
                  <label class="chk-line"><input type="checkbox" id="dtHAmb" ${p.link_ambient?'checked':''}/> 전역 외기온도 연동 (${simConfig.T_amb_C}°C)</label>
                  <div class="field"><div class="field-row"><label>상대측 입구온도 [°C]</label><input type="number" id="dtHTsec" value="${p.T_sec_in}" step="0.5" ${p.link_ambient?'disabled':''}></div></div>
@@ -870,27 +961,26 @@
             <div class="sec-hdr">${isPlate ? "판형(PHX) 지오메트리 (W, L, β, p_co, b, Np)" : "핀-플레이트 지오메트리 (코어 W/H/D, 피치 Fp, 두께 ft, Dh)"}</div>
             ${ctx.hxGeoFieldsHTML(p, "dtH")}
             ${ctx.hxMethodFieldsHTML(p, "dtH")}
-            <label class="chk-line"><input type="checkbox" id="dtHAutoDP" ${p.auto_dP!==false?'checked':''}/> 모멘텀 기반 ΔP 자동 계산</label>
+            <label class="chk-line"><input type="checkbox" id="dtHAutoDP" ${p.auto_dP!==false?'checked':''}/> 모멘텀 기반 ΔP 자동 계산 (Churchill/Friedel)</label>
           </div>
         </div>
         <div>
           <div class="card" style="height:375px;display:flex;flex-direction:column;">
-            <h2>${isPlate ? "판형 열교환기(PHX) 정면·적층 지오메트리 도해 &amp; 대향류 애니메이션" : "핀-플레이트 코어·확대 지오메트리 도해 &amp; 6-세그먼트 온도장 애니메이션"}</h2>
+            <h2>${isPlate ? "판형 열교환기(PHX) 지오메트리 도해 &amp; 진성 대향류 애니메이션" : "핀-플레이트 코어·확대 지오메트리 도해 &amp; 온도장 애니메이션"}</h2>
             <div id="dtCutawayWrap" style="flex:1;min-height:0;">${isPlate ? buildPlateHxCutawaySVG(node) : buildFinPlateCutawaySVG(node)}</div>
           </div>
           <div class="kpi-grid">${buildKpiByNode(node)}</div>
+          ${node.result && node.result.metrics.warnings && node.result.metrics.warnings.length ? `<div class="card" style="background:#fef3c7;border-color:#f59e0b;font-size:11.5px;color:#92400e;"><b>⚠️ 상관식/범위 참고:</b> ${node.result.metrics.warnings.join(" | ")}</div>` : ""}
         </div>
       </div>`;
       bindHelpBtns();
       const fSel = q("#dtFluidNode"); if (fSel) fSel.onchange = e => { p.fluidNodeId = e.target.value; onParamChange(true); };
-      const gSel = q("#dtSigNode"); if (gSel) gSel.onchange = e => { p.sigNodeId = e.target.value; onParamChange(true); };
-      const fnSel = q("#dtHFanNode"); if (fnSel) fnSel.onchange = e => { p.fanNodeId = e.target.value; onParamChange(true); };
       q("#dtHMethod").onchange = e => { p.method = e.target.value; onParamChange(true); };
-      const ftEl = q("#dtHFinType"); if (ftEl) ftEl.onchange = e => { p.fin_type = e.target.value; p.fin_Cj = e.target.value === "flat" ? 0.145 : 0.267; onParamChange(true); };
+      const ftEl = q("#dtHFinType"); if (ftEl) ftEl.onchange = e => { p.fin_type = e.target.value; onParamChange(true); };
       const evEl = q("#dtHEvapCorr"); if (evEl) evEl.onchange = e => { p.ref_evap_corr = e.target.value; onParamChange(true); };
       const cdEl = q("#dtHCondCorr"); if (cdEl) cdEl.onchange = e => { p.ref_cond_corr = e.target.value; onParamChange(true); };
       const scEl = q("#dtHSecCorr"); if (scEl) scEl.onchange = e => { p.sec_phe_corr = e.target.value; onParamChange(true); };
-      ["#dtHLp:louver_pitch_mm","#dtHLa:louver_angle_deg","#dtHCj:fin_Cj","#dtHCref:ref_corr_C","#dtHCsec:sec_corr_C","#dtHTsec:T_sec_in"].forEach(s => {
+      ["#dtHLp:louver_pitch_mm","#dtHLa:louver_angle_deg","#dtHCjMult:fin_Cj_mult","#dtHCjFlat:fin_Cj_flat","#dtHCref:ref_corr_C","#dtHCsec:sec_corr_C","#dtHTsec:T_sec_in"].forEach(s => {
         const [id, k] = s.split(":"), el = q(id);
         if (el) el.oninput = e => { p[k] = +e.target.value; onParamChange(false); };
       });
@@ -956,7 +1046,7 @@
           <div id="dtFStatus" style="font-size:11px;color:var(--green);margin-top:4px;">유효한 팬 성능곡선이 입력되어 있습니다.</div>
         </div></div>
         <div>
-          <div class="card" style="height:365px;display:flex;flex-direction:column;"><h2>팬 블레이드 &amp; P-Q 성능곡선 교차 운전점</h2><div id="dtCutawayWrap" style="flex:1;min-height:0;">${buildFanCutawaySVG(node, simConfig)}</div></div>
+          <div class="card" style="height:365px;display:flex;flex-direction:column;"><h2>팬 블레이드 &amp; P-Q 성능곡선 교차 운전점 (HX ΔP 직결)</h2><div id="dtCutawayWrap" style="flex:1;min-height:0;">${buildFanCutawaySVG(node, simConfig, ctx)}</div></div>
           <div class="kpi-grid">${buildKpiByNode(node)}</div>
         </div>
       </div>`;

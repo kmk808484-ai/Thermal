@@ -107,6 +107,8 @@
   .cons-pill.ok { border-color: #22c55e88; color: #15803d; background: #22c55e18; }
   .cons-pill.warn { border-color: #f59e0b88; color: #b45309; background: #f59e0b18; }
   .cons-pill.err { border-color: #ef4444; color: #dc2626; background: #ef444418; }
+  .unconv-dim { opacity: 0.52; filter: grayscale(0.35); }
+  .unconv-alert { background: #fef2f2; color: #b91c1c; border: 1.5px solid #ef4444; border-radius: 7px; padding: 5px 8px; font-size: 11px; font-weight: 700; margin-bottom: 6px; }
 
   /* 결과창 가시성 대폭 강화 (한 줄씩 큼직하게 + 드래그하여 Origin 시계열 그래프 생성) */
   .res-box { background: var(--panel); border: 1.5px solid var(--border); border-radius: 10px; padding: 12px 13px; margin-top: 10px; }
@@ -120,9 +122,9 @@
   .res-line:last-child { margin-bottom: 0; }
   .res-line[draggable="true"] { cursor: grab; }
   .res-line[draggable="true"]:hover { border-color: var(--accent); background: #0284c712; transform: translateX(-2px); }
-  .res-line .r-lbl { color: var(--muted); font-weight: 700; font-size: 13px; display: flex; align-items: center; gap: 5px; }
-  .res-line .r-val { font-size: 14.5px; font-weight: 800; color: var(--text); }
-  .drag-hint-badge { font-size: 10px; font-weight: 700; color: var(--accent); background: #0284c718; border: 1px solid #0284c755; padding: 1px 6px; border-radius: 999px; }
+  .res-line .r-lbl { color: var(--muted); font-weight: 700; font-size: 12.5px; display: flex; align-items: center; gap: 5px; flex-wrap: wrap; min-width: 0; }
+  .res-line .r-val { font-size: 14px; font-weight: 800; color: var(--text); white-space: nowrap; flex-shrink: 0; margin-left: 6px; }
+  .drag-hint-badge { font-size: 10px; font-weight: 700; color: var(--accent); background: #0284c718; border: 1px solid #0284c755; padding: 1px 6px; border-radius: 999px; white-space: nowrap; flex-shrink: 0; }
 
   /* 추가 포트 스타일 (공기 보조 포트 & 신호 포트) */
   .port-air-in { border-color: #0891b2; background: #e0f2fe; }
@@ -481,6 +483,7 @@
           <strong style="color:var(--accent);">📈 선도</strong>
           <select id="plotMode"><option value="ph">P-h 선도</option><option value="ts">T-s 선도</option><option value="sweep">파라미터 스윕</option></select>
           <select id="sweepX" style="display:none;"><option value="rpm">X축: RPM</option><option value="p2">X축: P2</option></select>
+          <span id="sweepRangeWrap" style="display:none;align-items:center;gap:3px;font-size:10.5px;">범위:<input type="number" id="sweepMin" value="1500" style="width:52px;padding:1px 3px;font-size:10.5px;">~<input type="number" id="sweepMax" value="5500" style="width:52px;padding:1px 3px;font-size:10.5px;"></span>
           <select id="plotY" style="display:none;"></select>
           <label id="lblXLog" style="display:inline-flex;align-items:center;gap:2px;cursor:pointer;"><input type="checkbox" id="plotXLog" />X Log</label>
           <label id="lblYLog" style="display:inline-flex;align-items:center;gap:2px;cursor:pointer;"><input type="checkbox" id="plotYLog" checked />Y Log</label>
@@ -511,10 +514,10 @@
         <div id="sysSummaryBody"></div>
       </div>
 
-      <!-- 2. 솔버 전역 입구조건 & 시뮬레이션 시간 (시스템 해석 요약 바로 밑에 구분 위치 · 창 분리 가능) -->
+      <!-- 2. 솔버 전역 입구조건 & 준정상 스캔 시간 (시스템 해석 요약 바로 밑에 구분 위치 · 창 분리 가능) -->
       <div class="solver-dock" id="solverDockPanel">
         <div class="solver-dock-hdr" id="solverDockHandle">
-          <strong style="color:#0284c7;font-size:13px;">🧮 솔버 전역 입구조건 &amp; 시간</strong>
+          <strong style="color:#0284c7;font-size:13px;">🧮 솔버 전역 입구조건 &amp; 준정상 스캔</strong>
           <div style="display:flex;gap:4px;align-items:center;">
             <button class="green sm" id="svReRunBtn">▶ 재계산</button>
             <button class="sm primary" id="floatSolverBtn">🗗 창 분리</button>
@@ -522,24 +525,25 @@
         </div>
         <div class="solver-dock-row">
           <span class="cons-pill" id="svStatusPill">대기</span>
-          <span class="cons-pill" id="pillMass">질량: -</span>
-          <span class="cons-pill" id="pillEnergy">에너지: -</span>
-          <span class="cons-pill" id="pillMomentum">모멘텀: -</span>
+          <span class="cons-pill" id="pillMass">① 질량: -</span>
+          <span class="cons-pill" id="pillEnergy">② 에너지: -</span>
+          <span class="cons-pill" id="pillMomentum">③ 모멘텀: -</span>
         </div>
+        <div id="svSeqBar" style="font-size:10.5px;color:var(--muted);background:var(--panel-dark);border:1px solid var(--border);border-radius:6px;padding:4px 7px;line-height:1.45;">수렴 모니터링 대기 중 (질량 · 에너지 · 모멘텀 → 솔버 잔차)</div>
         <div class="solver-dock-row">
           <div class="cfg-item"><label>압축기 RPM</label><input type="number" id="cfgCompRpm" value="3000" step="100" min="500" max="9000"></div>
           <div class="cfg-item"><label>외기온도 [°C]</label><input type="number" id="cfgTamb" value="35.0" step="1.0" min="-30" max="60"></div>
           <div class="cfg-item"><label>팬 RPM</label><input type="number" id="cfgFanRpm" value="1800" step="100" min="200" max="6000"></div>
-          <div class="cfg-item"><label>현재 시각 t [s]</label><input type="number" id="cfgTimeSec" value="0" step="1" min="0" max="3600"></div>
-          <div class="cfg-item"><label style="color:#0284c7;">총 시뮬 시간 T [s]</label><input type="number" id="cfgSimDuration" value="30" step="5" min="1" max="3600"></div>
-          <div class="cfg-item"><label style="color:#0284c7;">시간 간격 dt [s]</label><input type="number" id="cfgSimDt" value="1.0" step="0.5" min="0.2" max="60"></div>
+          <div class="cfg-item"><label>스캔 시각 t [s]</label><input type="number" id="cfgTimeSec" value="0" step="1" min="0" max="3600"></div>
+          <div class="cfg-item"><label style="color:#0284c7;">스캔 구간 T [s]</label><input type="number" id="cfgSimDuration" value="30" step="5" min="1" max="3600"></div>
+          <div class="cfg-item"><label style="color:#0284c7;">출력 간격 dt [s]</label><input type="number" id="cfgSimDt" value="1.0" step="0.5" min="0.2" max="60"></div>
         </div>
         <div class="solver-dock-row">
           <div class="cfg-item" style="flex:1 1 100%;"><label>수치기법</label>
             <select id="dockNumMethod">
-              <option value="newton_secant">준-뉴턴/할선법</option>
-              <option value="fixed_point">고정점 완화</option>
-              <option value="aitken">Aitken Δ²</option>
+              <option value="newton_secant">전역 Newton-Raphson (권장)</option>
+              <option value="fixed_point">안정화 고정점 완화</option>
+              <option value="aitken">표준 Steffensen / Aitken Δ²</option>
             </select>
           </div>
           <label class="chk-line" style="margin:0;"><input type="checkbox" id="dockGovMass" checked/>질량</label>
@@ -556,10 +560,10 @@
   </div>
 </div>
 
-<!-- OriginLab 스타일 시계열 그래프 플로팅 창 (결과값 드래그 앤 드롭) -->
+<!-- OriginLab 스타일 준정상 시나리오 스캔 플로팅 창 (결과값 드래그 앤 드롭) -->
 <div class="origin-win" id="originPlotWin">
   <div class="origin-bar" id="originPlotHandle">
-    <span id="originPlotTitle">📈 Origin Time-Series Plot — Variable vs. Time [s]</span>
+    <span id="originPlotTitle">📈 준정상 시나리오 스캔 (Quasi-Steady) — Variable vs. t [s]</span>
     <div style="display:flex;gap:5px;align-items:center;">
       <button class="sm" id="originClearSeriesBtn" style="background:#334155;color:#fff;border-color:#475569;">초기화</button>
       <button class="sm green" id="originExportCsvBtn">📥 CSV</button>
@@ -695,28 +699,47 @@ document.querySelectorAll(".folder-hdr").forEach(hdr => {
   };
 });
 
-// ================= CoolProp 유체 DB =================
+// ================= CoolProp 유체 DB (버전 관리 + 무음 R134a 폴백 제거) =================
 const FLUID_STORE_KEY = "amesim_sim_fluids_v2_coolprop";
+const FLUID_VER_KEY = FLUID_STORE_KEY + "_version";
 let fluidRawDB = {}, fluidTableDB = {}, lastConvergence = null;
 function compileAllFluidTables() {
   fluidTableDB = {};
   Object.keys(fluidRawDB).forEach(k => { try { fluidTableDB[k] = new FP.FluidTable(k, fluidRawDB[k]); } catch {} });
 }
 function initFluidDB() {
-  try { const s = JSON.parse(localStorage.getItem(FLUID_STORE_KEY) || "null"); if (s && Object.keys(s).length > 0) fluidRawDB = s; } catch {}
+  const savedVer = localStorage.getItem(FLUID_VER_KEY);
+  const curVer = FP.FLUID_DB_VERSION || "2026.11.v2";
+  if (savedVer === curVer) {
+    try { const s = JSON.parse(localStorage.getItem(FLUID_STORE_KEY) || "null"); if (s && Object.keys(s).length > 0) fluidRawDB = s; } catch {}
+  } else {
+    fluidRawDB = {};
+  }
   const defaults = FP.getDefaultFluidDB();
   Object.keys(defaults).forEach(k => { if (!fluidRawDB[k]) fluidRawDB[k] = defaults[k]; });
   compileAllFluidTables();
+  saveFluidDB();
 }
-function saveFluidDB() { try { localStorage.setItem(FLUID_STORE_KEY, JSON.stringify(fluidRawDB)); } catch {} }
+function saveFluidDB() {
+  try {
+    localStorage.setItem(FLUID_STORE_KEY, JSON.stringify(fluidRawDB));
+    localStorage.setItem(FLUID_VER_KEY, FP.FLUID_DB_VERSION || "2026.11.v2");
+  } catch {}
+}
 
 function getActiveFluidInfo() {
   const comp = nodes.find(n => n.type === "compressor");
   let refNode = comp && comp.params.fluidNodeId ? nodes.find(n => n.id === comp.params.fluidNodeId) : null;
   if (!refNode) refNode = nodes.find(n => n.type === "refrigerant");
   const fluidName = (refNode && refNode.params.fluid) || "R134a";
-  const refProp = fluidTableDB[fluidName] || fluidTableDB["R134a"] || new FP.FluidTable("R134a", FP.buildDefaultR134aRaw());
-  return { fluidName, refProp, refNode };
+  const refProp = fluidTableDB[fluidName] || null;
+  return { fluidName, refProp, refNode, missingFluid: !refProp };
+}
+
+let simDebounceTimer = null;
+function scheduleSimulation(animate = false, delay = 110) {
+  if (simDebounceTimer) clearTimeout(simDebounceTimer);
+  simDebounceTimer = setTimeout(() => { runSimulation(animate); }, delay);
 }
 
 function getSimConfig() {
@@ -740,7 +763,7 @@ function syncSolverDockFromNode() {
 
 ["cfgCompRpm","cfgTamb","cfgFanRpm","cfgTimeSec","cfgSimDuration","cfgSimDt"].forEach(id => {
   document.getElementById(id).oninput = () => {
-    if (appMode === "solver") runSimulation(false);
+    if (appMode === "solver") scheduleSimulation(false, 110);
     if (originSeriesList.length > 0) recomputeAndDrawOriginPlot();
   };
 });
@@ -751,7 +774,7 @@ document.getElementById("dockGovMom").onchange = e => { const sv = nodes.find(n 
 
 function getSolverOpts() {
   const sv = nodes.find(n => n.type === "solver");
-  const sp = sv ? sv.params : { loop_mode: "closed", gov_mass: true, gov_energy: true, gov_momentum: true, num_method: "newton_secant", maxIter: 50, tolT: 0.05, tolP: 0.02, alpha: 0.45 };
+  const sp = sv ? sv.params : { loop_mode: "closed", gov_mass: true, gov_energy: true, gov_momentum: true, num_method: "newton_secant", maxIter: 50, tolT: 0.05, tolP: 0.02, tolH: 0.35, tolE: 0.01, alpha: 0.45 };
   return {
     loop_mode: sp.loop_mode || "closed",
     gov_mass: sp.gov_mass !== false,
@@ -761,6 +784,8 @@ function getSolverOpts() {
     maxIter: Math.max(5, sp.maxIter || 50),
     tolT: Math.max(0.001, sp.tolT || 0.05),
     tolP: Math.max(0.001, sp.tolP || 0.02),
+    tolH: Math.max(0.01, sp.tolH || 0.35),
+    tolE: Math.max(0.001, sp.tolE || 0.01),
     alpha: Math.min(1.0, Math.max(0.1, sp.alpha || 0.45)),
     simConfig: getSimConfig(),
     fluidTableDB
@@ -804,20 +829,25 @@ function renderActiveDetailTab() {
   if (activeTabId === "canvas") return;
   const node = nodes.find(n => n.id === activeTabId);
   if (!node) { switchTab("canvas"); return; }
-  CV.renderComponentDetailTab(document.getElementById("page-detail"), node, {
+  const detailCtx = {
     nodes, edges, fluidRawDB, fluidTableDB, lastConvergence, simConfig: getSimConfig(),
-    hxGeoFieldsHTML, hxMethodFieldsHTML, bindHxGeoAndMethodInputs, drawSolverChart,
+    hxGeoFieldsHTML, hxMethodFieldsHTML, bindHxGeoAndMethodInputs, drawSolverChart, drawConservationChart,
     onShowCorrHelp: openCorrHelp,
     onParamChange: async (rerenderTab) => {
-      // 1) 슬라이더/지름/높이/개도율 변경 즉시 동기적으로 컷어웨이 SVG 업데이트 (60fps 무지연!)
       const wrap = document.getElementById("dtCutawayWrap");
-      if (wrap) wrap.innerHTML = CV.buildCutawayByNode(node, getSimConfig());
+      if (wrap) wrap.innerHTML = CV.buildCutawayByNode(node, getSimConfig(), detailCtx);
       renderChromeTabs();
       if (node.type === "solver") syncSolverDockFromNode();
-      // 2) 시뮬레이션 재계산 후 결과 반영
-      await runSimulation(false);
-      if (rerenderTab) renderActiveDetailTab();
-      else updateDetailLiveVisuals(node);
+      if (rerenderTab) {
+        await runSimulation(false);
+        renderActiveDetailTab();
+      } else {
+        if (simDebounceTimer) clearTimeout(simDebounceTimer);
+        simDebounceTimer = setTimeout(async () => {
+          await runSimulation(false);
+          updateDetailLiveVisuals(node, detailCtx);
+        }, 110);
+      }
     },
     onFluidAction: (action, nd, fluidKey) => {
       if (action === "refreshTab") renderActiveDetailTab();
@@ -834,18 +864,20 @@ function renderActiveDetailTab() {
       if (act === "run") { setAppMode("solver", false); runSimulation(true).then(() => renderActiveDetailTab()); }
       else if (act === "optimize") {
         const { fluidName, refProp } = getActiveFluidInfo();
+        if (!refProp) return;
         const { best } = SM.optimizeAlpha(nodes, edges, fluidName, refProp, getSolverOpts());
         if (best) { node.params.alpha = Number(best.alpha.toFixed(2)); runSimulation(true).then(() => renderActiveDetailTab()); }
       }
     },
     onPointLookupInit: (fluidKey) => initDetailPointLookup(fluidKey)
-  });
+  };
+  CV.renderComponentDetailTab(document.getElementById("page-detail"), node, detailCtx);
 }
 
-function updateDetailLiveVisuals(node) {
+function updateDetailLiveVisuals(node, ctx = null) {
   if (activeTabId !== node.id) return;
   const wrap = document.querySelector("#page-detail #dtCutawayWrap");
-  if (wrap) wrap.innerHTML = CV.buildCutawayByNode(node, getSimConfig());
+  if (wrap) wrap.innerHTML = CV.buildCutawayByNode(node, getSimConfig(), ctx || { nodes, edges, fluidTableDB });
   const oldKpi = document.querySelector("#page-detail .kpi-grid");
   if (oldKpi) {
     const newKpiHtml = CV.buildKpiByNode(node);
@@ -956,8 +988,8 @@ const wireSvg = document.getElementById("wireSvg"), nodeLayer = document.getElem
 function defaultHxParams(hxType) {
   return {
     hxType, method: "GEO",
-    fin_type: "louver", louver_pitch_mm: 1.2, louver_angle_deg: 27, fin_Cj: 0.267,
-    ref_cond_corr: "shah_cond", ref_evap_corr: "yan_lin", sec_phe_corr: "muley_manglik",
+    fin_type: "louver", louver_pitch_mm: 1.2, louver_angle_deg: 27, fin_Cj_mult: 1.0, fin_Cj_flat: 0.145,
+    ref_cond_corr: "shah_cond", ref_evap_corr: "han_lee_kim", sec_phe_corr: "martin",
     ref_corr_C: 1.0, sec_corr_C: 1.0,
     sec_fluid: hxType === "plate" ? "GW" : "Air", sec_mode: "fluid_temp",
     T_sec_in: hxType === "plate" ? 18.0 : 35.0, m_sec_kgs: hxType === "plate" ? 0.35 : 1.2, m_sec_ref: hxType === "plate" ? 0.35 : 1.2,
@@ -977,14 +1009,14 @@ function createNodeData(addType, x, y, rot = 0) {
   const cnt = nodes.filter(n => n.type === type).length + 1;
   const fId = getDefaultRefNodeId();
 
-  if (type === "solver") return { id, type, x, y, rot: 0, modelName: `솔버 #${cnt}`, params: { loop_mode: "closed", gov_mass: true, gov_energy: true, gov_momentum: true, num_method: "newton_secant", maxIter: 50, tolT: 0.05, tolP: 0.02, alpha: 0.45 }, result: null };
-  if (type === "refrigerant") return { id, type, x, y, rot: 0, modelName: `냉매 #${cnt}`, params: { fluid: "R134a", editFluid: "R134a", charge_mode: "auto", charge_g: 650, auto_rec_level_pct: 40, subKey: "h", supKey: "h" }, result: null };
-  if (type === "compressor") return { id, type, x, y, rot, modelName: `압축기 #${cnt}`, params: { fluidNodeId: fId, sigNodeId: "", P1_bar: 3.5, P2_bar: 12.5, T1_C: 15.0, rpm: 3000, vd_cc: 120, link_global: true, csv_is: CM.DEFAULT_EFF_CSV.is, csv_vol: CM.DEFAULT_EFF_CSV.vol, csv_mech: CM.DEFAULT_EFF_CSV.mech }, result: null };
+  if (type === "solver") return { id, type, x, y, rot: 0, modelName: `솔버 #${cnt}`, params: { loop_mode: "closed", gov_mass: true, gov_energy: true, gov_momentum: true, num_method: "newton_secant", maxIter: 50, tolT: 0.05, tolP: 0.02, tolH: 0.35, tolE: 0.01, alpha: 0.45 }, result: null };
+  if (type === "refrigerant") return { id, type, x, y, rot: 0, modelName: `냉매 #${cnt}`, params: { fluid: "R134a", editFluid: "R134a", charge_mode: "auto", charge_g: 650, auto_rec_level_pct: 40, auto_sc_K: 5.0, subKey: "h", supKey: "h" }, result: null };
+  if (type === "compressor") return { id, type, x, y, rot, modelName: `압축기 #${cnt}`, params: { fluidNodeId: fId, sigNodeId: "", comp_model: "eff_map", P1_bar: 3.5, P2_bar: 12.5, T1_C: 15.0, rpm: 3000, vd_cc: 120, f_Q: 0.05, eta_motor: 0.92, link_global: true, csv_is: CM.DEFAULT_EFF_CSV.is, csv_vol: CM.DEFAULT_EFF_CSV.vol, csv_mech: CM.DEFAULT_EFF_CSV.mech }, result: null };
   if (type === "hx_fin_plate") return { id, type, x, y, rot, modelName: `핀-플레이트 HX #${cnt}`, params: { ...defaultHxParams("fin_plate"), fluidNodeId: fId, sigNodeId: "", fanNodeId: "" }, result: null };
   if (type === "hx_plate") return { id, type, x, y, rot, modelName: `판형 HX #${cnt}`, params: { ...defaultHxParams("plate"), fluidNodeId: fId, sigNodeId: "" }, result: null };
   if (type === "fan") {
     const firstFp = nodes.find(n => n.type === "hx_fin_plate");
-    return { id, type, x, y, rot: 0, modelName: `팬 #${cnt}`, params: { targetHxId: firstFp ? firstFp.id : "", sigNodeId: "", rpm: 1800, rpm_ref: 1800, link_global: true, K_sys: 0.14, curve_csv: FM.DEFAULT_FAN_CSV }, result: null };
+    return { id, type, x, y, rot: 0, modelName: `팬 #${cnt}`, params: { targetHxId: firstFp ? firstFp.id : "", sigNodeId: "", rpm: 1800, rpm_ref: 1800, link_global: true, K_sys: 0.08, curve_csv: FM.DEFAULT_FAN_CSV }, result: null };
   }
   if (type === "receiver") {
     const isAcc = addType === "accumulator";
@@ -999,7 +1031,7 @@ function createNodeData(addType, x, y, rot = 0) {
     if (type === "sig_step") return { id, type, x, y, rot: 0, modelName: `계단함수 #${cnt}`, params: { val_init: 2400, val_final: 3600, t_step: 10 }, result: null };
     return { id, type, x, y, rot: 0, modelName: `시나리오 #${cnt}`, params: { scenario_csv: "0, 2200\n10, 3200\n20, 4200\n30, 2800" }, result: null };
   }
-  return { id, type: "valve", x, y, rot, modelName: `팽창밸브 #${cnt}`, params: { fluidNodeId: fId, valve_mode: "txv_sh", flow_corr: "re_diam_cd", sensorNodeId: "", orifice_D_mm: 2.8, opening_pct: 50, open_base_pct: 50, SH_target_K: 6.0, Kp_sh: 3.5, P_out_bar: 3.6, Cd: 0.65 }, result: null };
+  return { id, type: "valve", x, y, rot, modelName: `팽창밸브 #${cnt}`, params: { fluidNodeId: fId, valve_mode: "txv_sh", flow_corr: "re_diam_cd", sensorNodeId: "", orifice_D_mm: 2.8, opening_pct: 50, open_base_pct: 50, SH_target_K: 6.0, Kp_sh: 6.0, P_out_bar: 3.6, Cd: 0.65 }, result: null };
 }
 
 function getPortLocal(rot, isOut, portKind = "flow") {
@@ -1208,14 +1240,16 @@ function renderWires() {
   });
 }
 
-// ================= 시뮬레이션 실행 =================
+// ================= 시뮬레이션 실행 (반복 중 질량·에너지·모멘텀 실시간 수렴 표시 + 미수렴 보호) =================
 let simRunId = 0;
 async function runSimulation(animateProgress = false) {
   const myId = ++simRunId;
-  const val = SM.validateCircuit(nodes, edges);
+  const val = SM.validateCircuit(nodes, edges, fluidTableDB);
   mismatchEdgeIds = val.mismatchEdgeIds;
   const vBanner = document.getElementById("validationBanner");
   const svPill = document.getElementById("svStatusPill");
+  const pm = document.getElementById("pillMass"), pe = document.getElementById("pillEnergy"), pp = document.getElementById("pillMomentum");
+  const seqBar = document.getElementById("svSeqBar");
 
   if (!val.ok) {
     vBanner.style.display = "block"; vBanner.innerHTML = "⚠️ 실행 불가: " + val.errors[0];
@@ -1223,14 +1257,29 @@ async function runSimulation(animateProgress = false) {
     nodes.forEach(n => (n.result = null)); edges.forEach(e => (e.stream = null));
     renderNodes(); renderWires(); renderInspector(); return;
   }
+
+  const { fluidName, refProp, missingFluid } = getActiveFluidInfo();
+  if (missingFluid || !refProp) {
+    vBanner.style.display = "block"; vBanner.innerHTML = `⚠️ 물성치 오류: 선택된 냉매 '${fluidName}' 테이블이 DB에 없습니다.`;
+    svPill.className = "cons-pill err"; svPill.textContent = "물성 오류";
+    return;
+  }
   vBanner.style.display = "none";
 
-  const { fluidName, refProp } = getActiveFluidInfo();
-  const opts = getSolverOpts(); opts.delayMs = animateProgress ? 10 : 0;
+  const opts = getSolverOpts(); opts.delayMs = animateProgress ? 12 : 0;
 
-  const { simNodes, simEdges, convergence } = await SM.solveAsync(nodes, edges, fluidName, refProp, opts, ({ iter, maxIter }) => {
+  const { simNodes, simEdges, convergence } = await SM.solveAsync(nodes, edges, fluidName, refProp, opts, (prog) => {
     if (myId !== simRunId) return;
-    svPill.className = "cons-pill"; svPill.textContent = `계산중 ${iter}/${maxIter}`;
+    svPill.className = "cons-pill"; svPill.textContent = `계산중 ${prog.iter}/${prog.maxIter}`;
+    if (prog.conservation) {
+      pm.className = "cons-pill " + (prog.massOk ? "ok" : "warn");
+      pm.textContent = `① 질량: ${prog.conservation.mass.flow_residual_pct.toFixed(2)}%`;
+      pe.className = "cons-pill " + (prog.energyOk ? "ok" : "warn");
+      pe.textContent = `② 에너지: ${prog.conservation.energy.residual_pct.toFixed(3)}%`;
+      pp.className = "cons-pill " + (prog.momOk ? "ok" : "warn");
+      pp.textContent = `③ 모멘텀: ${prog.conservation.momentum.residual_bar.toFixed(3)}b`;
+      if (seqBar) seqBar.innerHTML = `반복 <b>#${prog.iter}</b>: 질량(${prog.massOk?'✓':'…'}) · 에너지(${prog.energyOk?'✓':'…'}) · 모멘텀(${prog.momOk?'✓':'…'}) → ‖R‖∞=${(prog.resNorm||0).toExponential(1)}`;
+    }
   });
 
   if (myId !== simRunId) return;
@@ -1239,26 +1288,42 @@ async function runSimulation(animateProgress = false) {
   lastConvergence = convergence;
 
   if (convergence.loop_mode === "open") { svPill.className = "cons-pill"; svPill.textContent = "개회로 (1회)"; }
-  else if (convergence.converged) { svPill.className = "cons-pill ok"; svPill.textContent = `수렴 (${convergence.iterations}/${convergence.maxIter}회)`; }
-  else { svPill.className = "cons-pill err"; svPill.textContent = `미수렴 (${convergence.iterations}/${convergence.maxIter}회)`; }
+  else if (convergence.converged) { svPill.className = "cons-pill ok"; svPill.textContent = `✓ 수렴 (${convergence.iterations}/${convergence.maxIter}회)`; }
+  else { svPill.className = "cons-pill err"; svPill.textContent = `✗ 미수렴 (${convergence.iterations}/${convergence.maxIter}회)`; }
 
   const cons = convergence.conservation;
+  const lastH = (convergence.history && convergence.history.length) ? convergence.history[convergence.history.length - 1] : null;
   if (cons) {
-    const pm = document.getElementById("pillMass"), pe = document.getElementById("pillEnergy"), pp = document.getElementById("pillMomentum");
-    pm.className = "cons-pill " + (Math.abs(cons.mass.residual_g) < 5 ? "ok" : "warn");
-    pm.textContent = `질량(${cons.mass.charge_mode==='auto'?'자동':'수동'}): ${cons.mass.total_g.toFixed(0)}g`;
-    pe.className = "cons-pill " + (cons.energy.residual_pct < 2.0 ? "ok" : "warn");
-    pe.textContent = `에너지 ΔE: ${cons.energy.residual_kW.toFixed(2)}kW`;
-    pp.className = "cons-pill " + (cons.momentum.residual_bar < 0.05 ? "ok" : "warn");
-    pp.textContent = `모멘텀 ΣΔP: ${cons.momentum.dP_loop_bar.toFixed(2)}b`;
+    const mOk = lastH ? lastH.massOk : (cons.mass.flow_residual_pct <= 0.1);
+    const eOk = lastH ? lastH.energyOk : (cons.energy.residual_pct <= opts.tolE);
+    const moOk = lastH ? lastH.momOk : (cons.momentum.residual_bar <= opts.tolP);
+    pm.className = "cons-pill " + (mOk ? "ok" : "err");
+    pm.textContent = `① 질량(${cons.mass.charge_mode==='auto'?'자동':'수동'}): ${cons.mass.total_g.toFixed(0)}g (${cons.mass.flow_residual_pct.toFixed(3)}%)`;
+    pe.className = "cons-pill " + (eOk ? "ok" : "err");
+    pe.textContent = `② 에너지 ΔE: ${cons.energy.residual_pct.toFixed(4)}%`;
+    pp.className = "cons-pill " + (moOk ? "ok" : "err");
+    pp.textContent = `③ 모멘텀 오차: ${cons.momentum.residual_bar.toFixed(4)}b`;
+  }
+  if (seqBar) {
+    const ms = convergence.milestones;
+    const seq = (ms && ms.orderSorted && ms.orderSorted.length)
+      ? ms.orderSorted.map(x => `<b>${x.label}</b>(#${x.iter})`).join(" → ")
+      : "미수렴";
+    const law2 = convergence.secondLawOk ? `<span style="color:#15803d;font-weight:700;">제2법칙 통과</span>` : `<span style="color:#dc2626;font-weight:700;">⚠️ 제2법칙 위반</span>`;
+    seqBar.innerHTML = `수렴순서: ${seq} | ${law2} | ‖R‖∞=${(convergence.residualNorm||0).toExponential(2)}`;
   }
 
   renderChromeTabs(); renderNodes(); renderWires(); renderInspector(); drawPlot();
+  if (activeTabId !== "canvas") {
+    const actNode = nodes.find(n => n.id === activeTabId);
+    if (actNode && actNode.type === "solver") renderActiveDetailTab();
+  }
 }
 
-// ================= P-h / T-s / 스윕 플랏터 =================
+// ================= P-h / T-s / 스윕 플랏터 (스윕 범위 설정 + 연속법 Warm-Start) =================
 const plotModeEl = document.getElementById("plotMode"), sweepXEl = document.getElementById("sweepX"), plotYEl = document.getElementById("plotY");
-const SWEEP_VARS = [{ key: "COP", label: "시스템 COP" }, { key: "Q_evap", label: "냉동능력 Q_evap [kW]" }, { key: "W_shaft", label: "압축기 축동력 [kW]" }, { key: "T2_C", label: "토출온도 T2 [°C]" }];
+const sweepRangeWrap = document.getElementById("sweepRangeWrap"), sweepMinEl = document.getElementById("sweepMin"), sweepMaxEl = document.getElementById("sweepMax");
+const SWEEP_VARS = [{ key: "COP_comp", label: "압축기 COP_comp" }, { key: "COP_sys", label: "시스템 COP_sys (팬·모터)" }, { key: "Q_evap", label: "냉동능력 Q_evap [kW]" }, { key: "W_shaft", label: "압축기 축동력 [kW]" }, { key: "T2_C", label: "토출온도 T2 [°C]" }];
 let pView = { xMin: 150, xMax: 500, yMin: 1, yMax: 35, xLog: false, yLog: true }, pDrag = null;
 const PAD = { L: 54, R: 20, T: 20, B: 28 };
 
@@ -1283,11 +1348,20 @@ function getPlotMapper(W, H) {
 function syncPlotOptions() {
   const m = plotModeEl.value, isDia = (m === "ph" || m === "ts");
   sweepXEl.style.display = isDia ? "none" : "inline-block"; plotYEl.style.display = isDia ? "none" : "inline-block";
+  if (sweepRangeWrap) sweepRangeWrap.style.display = isDia ? "none" : "inline-flex";
   ["lblXLog","lblYLog","lblIso1","lblIsoX","lblIsoRho","autoScaleBtn"].forEach(id => document.getElementById(id).style.display = isDia ? "inline-flex" : "none");
   if (!isDia) plotYEl.innerHTML = SWEEP_VARS.map(v => `<option value="${v.key}">${v.label}</option>`).join("");
   computeAutoPlotView(); drawPlot();
 }
-plotModeEl.onchange = syncPlotOptions; sweepXEl.onchange = drawPlot; plotYEl.onchange = drawPlot;
+plotModeEl.onchange = syncPlotOptions;
+sweepXEl.onchange = () => {
+  if (sweepXEl.value === "rpm") { sweepMinEl.value = 1500; sweepMaxEl.value = 5000; }
+  else { sweepMinEl.value = 12; sweepMaxEl.value = 28; }
+  drawPlot();
+};
+plotYEl.onchange = drawPlot;
+if (sweepMinEl) sweepMinEl.onchange = drawPlot;
+if (sweepMaxEl) sweepMaxEl.onchange = drawPlot;
 ["chkIsoMain","chkIsoX","chkIsoRho"].forEach(id => document.getElementById(id).onchange = drawPlot);
 document.getElementById("plotXLog").onchange = e => { pView.xLog = e.target.checked; if (pView.xLog && pView.xMin <= 0) pView.xMin = 0.1; drawPlot(); };
 document.getElementById("plotYLog").onchange = e => { pView.yLog = e.target.checked; if (pView.yLog && pView.yMin <= 0) pView.yMin = 0.1; drawPlot(); };
@@ -1351,16 +1425,23 @@ function drawPlot() {
     ctx.fillText(`${fluidName} (CoolProp) — ${mode === "ph" ? "P-h 선도" : "T-s 선도"}`, PAD.L + m.pW / 2, 14);
     return;
   }
-  const xKey = sweepXEl.value, yKey = plotYEl.value, [minX, maxX] = xKey === "rpm" ? [1500, 5500] : [8, 25];
+  const xKey = sweepXEl.value, yKey = plotYEl.value;
+  const minX = Number(sweepMinEl?.value) || (xKey === "rpm" ? 1500 : 12);
+  const maxX = Math.max(minX + 1, Number(sweepMaxEl?.value) || (xKey === "rpm" ? 5000 : 28));
   const labels = [], values = [];
+  let prevState = lastConvergence && lastConvergence.solutionState ? lastConvergence.solutionState : null;
   for (let i = 0; i <= 10; i++) {
     const xv = minX + (maxX - minX) * i / 10;
-    const { simNodes } = SM.solve(nodes, edges, fluidName, refProp, { ...getSolverOpts(), override: { [xKey]: xv } });
-    const comp = simNodes.find(n => n.type === "compressor" && n.result), evap = simNodes.find(n => SM.isHxType(n.type) && n.result && !n.result.metrics.isCondenser);
-    if (!comp) continue;
-    const cop = (evap && comp.result.metrics.W_shaft_kW > 0) ? evap.result.metrics.Q_kW / comp.result.metrics.W_shaft_kW : 0;
-    lastExportRows.push({ [xKey]: xv.toFixed(1), T2_C: comp.result.outlet.T_C.toFixed(2), W_shaft_kW: comp.result.metrics.W_shaft_kW.toFixed(3), Q_evap_kW: evap ? evap.result.metrics.Q_kW.toFixed(3) : "", COP: cop.toFixed(3) });
-    labels.push(xv.toFixed(0)); values.push(yKey === "COP" ? cop : (yKey === "Q_evap" && evap ? evap.result.metrics.Q_kW : (yKey === "W_shaft" ? comp.result.metrics.W_shaft_kW : comp.result.outlet.T_C)));
+    const swOpts = { ...getSolverOpts(), override: { [xKey]: xv }, warmStart: prevState };
+    if (xKey === "p2") swOpts.gov_energy = false;
+    const { simNodes, convergence } = SM.solve(nodes, edges, fluidName, refProp, swOpts);
+    if (convergence && convergence.converged && convergence.solutionState) prevState = convergence.solutionState;
+    const comp = simNodes.find(n => n.type === "compressor" && n.result);
+    if (!comp || !convergence.conservation) continue;
+    const en = convergence.conservation.energy;
+    lastExportRows.push({ [xKey]: xv.toFixed(1), T2_C: comp.result.outlet.T_C.toFixed(2), W_shaft_kW: en.W_shaft.toFixed(3), Q_evap_kW: en.Q_evap.toFixed(3), COP_comp: en.COP_comp.toFixed(3), COP_sys: en.COP_sys.toFixed(3) });
+    labels.push(xv.toFixed(0));
+    values.push(yKey === "COP_sys" ? en.COP_sys : (yKey === "COP_comp" ? en.COP_comp : (yKey === "Q_evap" ? en.Q_evap : (yKey === "W_shaft" ? en.W_shaft : comp.result.outlet.T_C))));
   }
   if (values.length < 2) return;
   const pW = W - PAD.L - PAD.R, pH = H - PAD.T - PAD.B, minY = Math.min(...values) * 0.94, maxY = Math.max(...values) * 1.06 + 1e-4;
@@ -1379,18 +1460,42 @@ function drawSolverChart(history, canvasId = "dtSolverCanvas") {
   const dpr = window.devicePixelRatio || 1, W = Math.floor(rect.width), H = Math.floor(rect.height);
   cvs.width = Math.floor(W * dpr); cvs.height = Math.floor(H * dpr);
   const ctx = cvs.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, W, H);
-  if (!history || history.length < 2) { ctx.fillStyle = "#64748b"; ctx.font = "12px sans-serif"; ctx.textAlign = "center"; ctx.fillText("폐회로 솔버 실행 후 반복 잔차 곡선이 표시됩니다.", W / 2, H / 2); return; }
-  const pad = { L: 54, R: 18, T: 22, B: 26 }, pW = W - pad.L - pad.R, pH = H - pad.T - pad.B;
-  const maxVal = Math.max(1e-3, ...history.map(h => Math.max(h.resT, h.resH, h.resP)));
-  const minLog = -3, maxLog = Math.ceil(Math.log10(maxVal * 1.5));
+  if (!history || history.length < 2) { ctx.fillStyle = "#64748b"; ctx.font = "12px sans-serif"; ctx.textAlign = "center"; ctx.fillText("폐회로 솔버 실행 후 솔버 잔차 곡선이 표시됩니다.", W / 2, H / 2); return; }
+  const pad = { L: 50, R: 16, T: 22, B: 26 }, pW = W - pad.L - pad.R, pH = H - pad.T - pad.B;
+  const maxVal = Math.max(1e-2, ...history.map(h => Math.max(h.resT, h.resH, h.resP, h.resNorm || 0)));
+  const minLog = -5, maxLog = Math.ceil(Math.log10(maxVal * 1.5));
   const xOf = i => pad.L + (i / (history.length - 1)) * pW;
-  const yOf = v => { const lv = Math.max(minLog, Math.log10(Math.max(1e-4, v))); return (H - pad.B) - ((lv - minLog) / (maxLog - minLog || 1)) * pH; };
-  ctx.strokeStyle = "#e2e8f0"; ctx.fillStyle = "#475569"; ctx.font = "10px sans-serif"; ctx.textAlign = "right";
-  for (let p = minLog; p <= maxLog; p++) { const gy = yOf(Math.pow(10, p)); ctx.beginPath(); ctx.moveTo(pad.L, gy); ctx.lineTo(W - pad.R, gy); ctx.stroke(); ctx.fillText("1e" + p, pad.L - 6, gy + 3); }
+  const yOf = v => { const lv = Math.max(minLog, Math.log10(Math.max(1e-6, v))); return (H - pad.B) - ((lv - minLog) / (maxLog - minLog || 1)) * pH; };
+  ctx.strokeStyle = "#e2e8f0"; ctx.fillStyle = "#475569"; ctx.font = "9.5px sans-serif"; ctx.textAlign = "right";
+  for (let p = minLog; p <= maxLog; p++) { const gy = yOf(Math.pow(10, p)); ctx.beginPath(); ctx.moveTo(pad.L, gy); ctx.lineTo(W - pad.R, gy); ctx.stroke(); ctx.fillText("1e" + p, pad.L - 5, gy + 3); }
   ctx.strokeStyle = "#1e293b"; ctx.strokeRect(pad.L, pad.T, pW, pH);
-  [{ key: "resT", col: "#0284c7", label: "ΔT [K]" }, { key: "resH", col: "#7c3aed", label: "Δh [kJ/kg]" }, { key: "resP", col: "#ea580c", label: "ΔP [bar]" }].forEach((s, idx) => {
-    ctx.strokeStyle = s.col; ctx.lineWidth = 2; ctx.beginPath(); history.forEach((h, i) => { const x = xOf(i), y = yOf(h[s.key]); i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); }); ctx.stroke();
-    ctx.fillStyle = s.col; ctx.textAlign = "left"; ctx.fillText("■ " + s.label, pad.L + 8 + idx * 85, 14);
+  [{ key: "resT", col: "#0284c7", label: "ΔT[K]" }, { key: "resH", col: "#7c3aed", label: "Δh[kJ/kg]" }, { key: "resP", col: "#ea580c", label: "ΔP[b]" }, { key: "resNorm", col: "#0f172a", label: "‖R‖∞" }].forEach((s, idx) => {
+    ctx.strokeStyle = s.col; ctx.lineWidth = s.key === "resNorm" ? 2.4 : 1.8; ctx.beginPath(); history.forEach((h, i) => { const x = xOf(i), y = yOf(h[s.key] || 1e-6); i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); }); ctx.stroke();
+    ctx.fillStyle = s.col; ctx.textAlign = "left"; ctx.fillText("■ " + s.label, pad.L + 4 + idx * 68, 14);
+  });
+}
+
+function drawConservationChart(history, canvasId = "dtConsCanvas") {
+  const cvs = document.getElementById(canvasId); if (!cvs) return;
+  const rect = cvs.getBoundingClientRect(); if (rect.width < 40 || rect.height < 40) return;
+  const dpr = window.devicePixelRatio || 1, W = Math.floor(rect.width), H = Math.floor(rect.height);
+  cvs.width = Math.floor(W * dpr); cvs.height = Math.floor(H * dpr);
+  const ctx = cvs.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, W, H);
+  if (!history || history.length < 2) { ctx.fillStyle = "#64748b"; ctx.font = "12px sans-serif"; ctx.textAlign = "center"; ctx.fillText("폐회로 솔버 실행 후 3대 보존법칙 수렴 곡선이 표시됩니다.", W / 2, H / 2); return; }
+  const pad = { L: 50, R: 16, T: 22, B: 26 }, pW = W - pad.L - pad.R, pH = H - pad.T - pad.B;
+  const maxVal = Math.max(1e-1, ...history.map(h => Math.max(h.resMassFlow_pct || 0, h.resE_pct || 0, h.resMom_bar || 0)));
+  const minLog = -5, maxLog = Math.ceil(Math.log10(maxVal * 1.5));
+  const xOf = i => pad.L + (i / (history.length - 1)) * pW;
+  const yOf = v => { const lv = Math.max(minLog, Math.log10(Math.max(1e-6, v))); return (H - pad.B) - ((lv - minLog) / (maxLog - minLog || 1)) * pH; };
+  ctx.strokeStyle = "#e2e8f0"; ctx.fillStyle = "#475569"; ctx.font = "9.5px sans-serif"; ctx.textAlign = "right";
+  for (let p = minLog; p <= maxLog; p++) { const gy = yOf(Math.pow(10, p)); ctx.beginPath(); ctx.moveTo(pad.L, gy); ctx.lineTo(W - pad.R, gy); ctx.stroke(); ctx.fillText("1e" + p, pad.L - 5, gy + 3); }
+  // 허용오차 기준선 (에너지 0.01% = 1e-2)
+  const gyTol = yOf(0.01);
+  ctx.strokeStyle = "#16a34a66"; ctx.setLineDash([4, 3]); ctx.beginPath(); ctx.moveTo(pad.L, gyTol); ctx.lineTo(W - pad.R, gyTol); ctx.stroke(); ctx.setLineDash([]);
+  ctx.strokeStyle = "#1e293b"; ctx.strokeRect(pad.L, pad.T, pW, pH);
+  [{ key: "resMassFlow_pct", col: "#0891b2", label: "①질량[%]" }, { key: "resE_pct", col: "#16a34a", label: "②에너지[%]" }, { key: "resMom_bar", col: "#dc2626", label: "③모멘텀[b]" }].forEach((s, idx) => {
+    ctx.strokeStyle = s.col; ctx.lineWidth = 2.2; ctx.beginPath(); history.forEach((h, i) => { const x = xOf(i), y = yOf(h[s.key] || 1e-6); i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); }); ctx.stroke();
+    ctx.fillStyle = s.col; ctx.textAlign = "left"; ctx.fillText("■ " + s.label, pad.L + 4 + idx * 82, 14);
   });
 }
 
@@ -1684,51 +1789,68 @@ function resLineHTML(label, valStr, dragKey = "", color = "") {
 
 function updateSysSummaryPanel() {
   if (!sysSummaryBody) return;
-  const comp = nodes.find(n => n.type === "compressor" && n.result);
-  const evap = nodes.find(n => SM.isHxType(n.type) && n.result && !n.result.metrics.isCondenser);
-  const cond = nodes.find(n => SM.isHxType(n.type) && n.result && n.result.metrics.isCondenser);
-  const cop = (comp && evap && comp.result.metrics.W_shaft_kW > 0) ? (evap.result.metrics.Q_kW / comp.result.metrics.W_shaft_kW) : 0;
-  const chG = lastConvergence && lastConvergence.conservation ? lastConvergence.conservation.mass.total_g : 0;
-  sysSummaryBody.innerHTML =
-    resLineHTML("시스템 성적계수 COP", cop > 0 ? cop.toFixed(2) : "-", "sys:COP", "#15803d") +
+  const cons = lastConvergence && lastConvergence.conservation ? lastConvergence.conservation : null;
+  const isUnconv = !!(lastConvergence && lastConvergence.loop_mode !== "open" && !lastConvergence.converged);
+  sysSummaryBody.classList.toggle("unconv-dim", isUnconv);
+  const en = cons ? cons.energy : null;
+  const chG = cons ? cons.mass.total_g : 0;
+  const warnBanner = isUnconv
+    ? `<div class="unconv-alert">⚠️ 솔버 미수렴 (${lastConvergence.iterations}/${lastConvergence.maxIter}회) — 아래 결과는 물리적으로 신뢰할 수 없습니다!</div>`
+    : (lastConvergence && !lastConvergence.secondLawOk ? `<div class="unconv-alert">⚠️ 열역학 제2법칙 위반 감지 — 경계조건을 점검하세요.</div>` : "");
+  sysSummaryBody.innerHTML = warnBanner +
+    resLineHTML("압축기 성적계수 COP_comp", en && en.COP_comp > 0 ? en.COP_comp.toFixed(2) : "-", "sys:COP", "#15803d") +
+    resLineHTML("시스템 성적계수 COP_sys (팬·모터)", en && en.COP_sys > 0 ? en.COP_sys.toFixed(2) : "-", "sys:COP_sys", "#0d9488") +
     resLineHTML("총 냉매 충전량", `${chG.toFixed(0)} g`, "sys:charge_g") +
-    resLineHTML("증발 냉동능력 Q_evap", evap ? `${evap.result.metrics.Q_kW.toFixed(2)} kW` : "-", "sys:Q_evap", "#0284c7") +
-    resLineHTML("응축 방열량 Q_cond", cond ? `${cond.result.metrics.Q_kW.toFixed(2)} kW` : "-", "sys:Q_cond", "#16a34a") +
-    resLineHTML("압축기 축동력 W_shaft", comp ? `${comp.result.metrics.W_shaft_kW.toFixed(2)} kW` : "-", "sys:W_shaft", "var(--warn)");
+    resLineHTML("총 증발 냉동능력 ΣQ_evap", en ? `${en.Q_evap.toFixed(2)} kW` : "-", "sys:Q_evap", "#0284c7") +
+    resLineHTML("총 응축 방열량 ΣQ_cond", en ? `${en.Q_cond.toFixed(2)} kW` : "-", "sys:Q_cond", "#16a34a") +
+    resLineHTML("축동력 W_shaft / 총전력 (W_el+W_fan)", en ? `${en.W_shaft.toFixed(2)} / ${(en.W_elec + en.W_fan).toFixed(2)} kW` : "-", "sys:W_shaft", "var(--warn)");
   bindResultLineDragEvents(sysSummaryBody);
 }
 
 function renderInspector() {
   updateSysSummaryPanel();
   const maybeRun = () => {
-    if (appMode === "solver") runSimulation(false);
+    if (appMode === "solver") scheduleSimulation(false, 110);
     else { renderNodes(); renderWires(); renderChromeTabs(); }
     if (originSeriesList.length > 0) recomputeAndDrawOriginPlot();
   };
 
-  // 배관 선택 시 (솔버모드: 한 줄씩 큼직하게 배관 물성 결과 상세 출력 / 스케치모드: 삭제 버튼)
+  // 배관 선택 시 (배관 형상 L·D·ε·Δz·UA_ins 편집기 + 솔버모드 Churchill/Friedel/Zivi 결과 표시)
   if (selectedEdgeId) {
     const ed = edges.find(e => e.id === selectedEdgeId);
     if (ed) {
       const a = nodes.find(n => n.id === ed.from), b = nodes.find(n => n.id === ed.to);
       const st = ed.stream;
       const eKind = ed.kind || "flow";
+      const pSpec = eKind === "flow" ? SM.getEdgePipeSpec(ed, nodes) : null;
+      const pipeGeoHTML = eKind === "flow" ? `
+        <div class="sec-hdr">배관 지오메트리 (Churchill 단상 / Friedel 2상 / Zivi 보유량)</div>
+        <div class="field"><div class="field-row"><label>길이 L [m] / 내경 D [mm]</label><div style="display:flex;gap:4px;"><input type="number" id="insPipeL" value="${pSpec.L_m}" step="0.1" min="0.05" style="width:58px;"><input type="number" id="insPipeD" value="${pSpec.D_mm}" step="1" min="3" style="width:58px;"></div></div></div>
+        <div class="field"><div class="field-row"><label>조도 ε [mm] / 고도차 Δz [m]</label><div style="display:flex;gap:4px;"><input type="number" id="insPipeEps" value="${pSpec.eps_mm}" step="0.0005" min="0" style="width:58px;"><input type="number" id="insPipeDz" value="${pSpec.dz_m}" step="0.1" style="width:58px;"></div></div></div>
+        <div class="field"><div class="field-row"><label>배관 열전달 UA_ins [W/K]</label><input type="number" id="insPipeUA" value="${pSpec.UA_ins_WK}" step="0.1" min="0"></div></div>` : "";
       inspectorBody.innerHTML = `<h2><span>🔗 ${eKind==='signal'?'신호선':(eKind==='air'?'공기 풍량 배관':'냉매 배관')} (${a?a.modelName:""} → ${b?b.modelName:""})</span><button class="sm danger" id="delEdgeBtn">삭제</button></h2>
-        ${appMode === "solver" && st ? `<div class="res-box"><h3>배관 유체 상태량 결과 <span style="font-size:10.5px;color:var(--muted);font-weight:600;">(캔버스로 드래그 → 시계열 그래프)</span></h3>
+        ${pipeGeoHTML}
+        ${appMode === "solver" && st ? `<div class="res-box"><h3>배관 유체 상태량 결과 <span style="font-size:10.5px;color:var(--muted);font-weight:600;">(캔버스로 드래그 → 스캔 그래프)</span></h3>
           ${resLineHTML("압력 P", `${st.P_bar.toFixed(3)} bar`, `edge:${ed.id}:P_bar`)}
           ${resLineHTML("유체 온도 T", `${st.T_C.toFixed(2)} °C`, `edge:${ed.id}:T_C`, CV.tempToCFDColor(st.T_C))}
           ${resLineHTML("포화온도 T_sat", `${(st.T_sat_C??0).toFixed(2)} °C`, `edge:${ed.id}:T_sat_C`)}
           ${resLineHTML("건도 Quality (x)", `${(st.quality??1).toFixed(3)}`, `edge:${ed.id}:quality`)}
           ${resLineHTML("비엔탈피 h", `${st.h_kJkg.toFixed(2)} kJ/kg`, `edge:${ed.id}:h_kJkg`)}
           ${resLineHTML("비엔트로피 s", `${(st.s_kJkgK||0).toFixed(4)} kJ/kg·K`, `edge:${ed.id}:s_kJkgK`)}
-          ${resLineHTML("밀도 ρ", `${(st.rho||0).toFixed(2)} kg/m³`, `edge:${ed.id}:rho`)}
+          ${resLineHTML("밀도 ρ / 질량유속 G", `${(st.rho||0).toFixed(2)} kg/m³  |  ${(st.pipe_G||0).toFixed(0)} kg/m²s`, `edge:${ed.id}:rho`)}
           ${resLineHTML("질량유량 m_dot", `${st.m_dot.toFixed(4)} kg/s`, `edge:${ed.id}:m_dot`, "var(--accent)")}
-          ${resLineHTML("점성계수 μ", `${(st.mu||0).toFixed(1)} μPa·s`)}
-          ${resLineHTML("열전도도 k / 정압비열 Cp", `${(st.k||0).toFixed(1)} mW/m·K  |  ${(st.Cp||0).toFixed(3)} kJ/kg·K`)}
-          ${resLineHTML("배관 마찰 압력손실 ΔP", `${(st.pipe_dP_bar||0).toFixed(4)} bar`, `edge:${ed.id}:pipe_dP_bar`)}
-          ${resLineHTML("배관 내부 냉매 보유량", `${((st.pipe_mass_kg||0)*1000).toFixed(1)} g`)}
-        </div>` : `<div style="font-size:12.5px;color:var(--muted);margin-top:10px;line-height:1.6;">${eKind==='signal'?'신호 연결선입니다. 삭제하려면 [삭제] 버튼 또는 Delete 키를 누르세요.':(eKind==='air'?'팬과 핀-플레이트 열교환기 사이의 공기 유동 연결선입니다.':'스케치 모드입니다. <b>▶ 실행 (솔버 모드)</b>을 누른 뒤 배관을 클릭하면 항목별로 구분된 상세 결과가 표시됩니다.')}</div>`}`;
+          ${resLineHTML("배관 손실 ΔP (마찰+중력)", `${(st.pipe_dP_bar||0).toFixed(4)} bar`, `edge:${ed.id}:pipe_dP_bar`)}
+          ${resLineHTML("배관 내부 냉매 보유량 (Zivi)", `${((st.pipe_mass_kg||0)*1000).toFixed(1)} g`)}
+        </div>` : `<div style="font-size:12.5px;color:var(--muted);margin-top:10px;line-height:1.6;">${eKind==='signal'?'신호 연결선입니다. 삭제하려면 [삭제] 버튼 또는 Delete 키를 누르세요.':(eKind==='air'?'팬과 핀-플레이트 열교환기 사이의 공기 유동 연결선입니다.':'스케치 모드입니다. 위에서 배관 치수를 설정하고 <b>▶ 실행 (솔버 모드)</b>을 누르면 상세 결과가 표시됩니다.')}</div>`}`;
       document.getElementById("delEdgeBtn").onclick = () => { edges = edges.filter(x => x.id !== ed.id); selectedEdgeId = null; maybeRun(); renderInspector(); };
+      if (eKind === "flow") {
+        const setPipe = (k, v) => { ed.pipe = { ...SM.getEdgePipeSpec(ed, nodes), [k]: v }; maybeRun(); };
+        document.getElementById("insPipeL").oninput = e => setPipe("L_m", Math.max(0.05, +e.target.value || 0.8));
+        document.getElementById("insPipeD").oninput = e => setPipe("D_mm", Math.max(3, +e.target.value || 12));
+        document.getElementById("insPipeEps").oninput = e => setPipe("eps_mm", Math.max(0, +e.target.value || 0));
+        document.getElementById("insPipeDz").oninput = e => setPipe("dz_m", +e.target.value || 0);
+        document.getElementById("insPipeUA").oninput = e => setPipe("UA_ins_WK", Math.max(0, +e.target.value || 0));
+      }
       bindResultLineDragEvents(inspectorBody);
       return;
     }
@@ -1805,11 +1927,14 @@ function renderInspector() {
   if (n.type === "solver") {
     const p = n.params;
     inspectorBody.innerHTML = `<h2><span>${n.modelName}</span>${hdrBtns}</h2>
-      <div class="field"><div class="field-row"><label>수치해석 기법</label><select id="insSvNum"><option value="newton_secant" ${p.num_method==='newton_secant'?'selected':''}>준-뉴턴/할선</option><option value="fixed_point" ${p.num_method==='fixed_point'?'selected':''}>고정점 완화</option><option value="aitken" ${p.num_method==='aitken'?'selected':''}>Aitken Δ²</option></select></div></div>
-      <div class="field"><div class="field-row"><label>완화계수 α / maxIter</label><div style="display:flex;gap:4px;"><input type="number" id="insSvAlpha" value="${p.alpha}" step="0.05" style="width:54px;"><input type="number" id="insSvIter" value="${p.maxIter}" step="5" style="width:54px;"></div></div></div>`;
+      <div class="field"><div class="field-row"><label>수치해석 기법</label><select id="insSvNum"><option value="newton_secant" ${p.num_method==='newton_secant'?'selected':''}>전역 Newton-Raphson</option><option value="fixed_point" ${p.num_method==='fixed_point'?'selected':''}>안정화 고정점 완화</option><option value="aitken" ${p.num_method==='aitken'?'selected':''}>표준 Steffensen / Aitken Δ²</option></select></div></div>
+      <div class="field"><div class="field-row"><label>완화계수 α / maxIter</label><div style="display:flex;gap:4px;"><input type="number" id="insSvAlpha" value="${p.alpha}" step="0.05" style="width:54px;"><input type="number" id="insSvIter" value="${p.maxIter}" step="5" style="width:54px;"></div></div></div>
+      <div class="field"><div class="field-row"><label>허용 Δh [kJ/kg] / ΔE [%]</label><div style="display:flex;gap:4px;"><input type="number" id="insSvTolH" value="${p.tolH??0.35}" step="0.05" style="width:54px;"><input type="number" id="insSvTolE" value="${p.tolE??0.01}" step="0.005" style="width:54px;"></div></div></div>`;
     document.getElementById("insSvNum").onchange = e => { p.num_method = e.target.value; syncSolverDockFromNode(); maybeRun(); };
     document.getElementById("insSvAlpha").oninput = e => { p.alpha = +e.target.value || 0.45; maybeRun(); };
     document.getElementById("insSvIter").oninput = e => { p.maxIter = +e.target.value || 50; maybeRun(); };
+    document.getElementById("insSvTolH").oninput = e => { p.tolH = +e.target.value || 0.35; maybeRun(); };
+    document.getElementById("insSvTolE").oninput = e => { p.tolE = +e.target.value || 0.01; maybeRun(); };
 
   } else if (n.type === "refrigerant") {
     const p = n.params, allFluids = Object.keys(fluidTableDB);
@@ -1818,12 +1943,14 @@ function renderInspector() {
       <div class="field"><div class="field-row"><label>정의할 유체 (냉매/2차유체)</label><select id="insRefFluid" style="width:135px;">${allFluids.map(k => `<option value="${k}" ${k===p.fluid?'selected':''}>${k}</option>`).join("")}</select></div></div>
       ${isTwoPh ? `<div class="field"><div class="field-row"><label>충전량 방식</label><select id="insChMode" style="width:135px;"><option value="auto" ${p.charge_mode==='auto'?'selected':''}>자동 계산</option><option value="manual" ${p.charge_mode!=='auto'?'selected':''}>수동 입력</option></select></div></div>
       ${p.charge_mode === "auto"
-        ? `<div class="field"><div class="field-row"><label>목표 탱크 액위 [%]</label><input type="number" id="insAutoLv" value="${p.auto_rec_level_pct??40}" step="5"></div></div>`
+        ? `<div class="field"><div class="field-row"><label>목표 탱크 액위 [%]</label><input type="number" id="insAutoLv" value="${p.auto_rec_level_pct??40}" step="5"></div></div>
+           <div class="field"><div class="field-row"><label>자동 목표 과냉도 SC [K]</label><input type="number" id="insAutoSc" value="${p.auto_sc_K??5.0}" step="0.5" min="0" max="20"></div></div>`
         : `<div class="field"><div class="field-row"><label>수동 충전량 [g]</label><input type="number" id="insChG" value="${p.charge_g??650}" step="25"></div></div>`}`
       : `<div style="font-size:11.5px;color:var(--green);margin-top:6px;">✔ 열교환기 상대측 단상 유체(<b>${p.fluid}</b>) 물성치가 활성화되었습니다.</div>`}`;
     document.getElementById("insRefFluid").onchange = e => { p.fluid = e.target.value; p.editFluid = e.target.value; computeAutoPlotView(); maybeRun(); renderInspector(); };
     const cm = document.getElementById("insChMode"); if (cm) cm.onchange = e => { p.charge_mode = e.target.value; maybeRun(); renderInspector(); };
     const lv = document.getElementById("insAutoLv"); if (lv) lv.oninput = e => { p.auto_rec_level_pct = +e.target.value || 40; maybeRun(); };
+    const sc = document.getElementById("insAutoSc"); if (sc) sc.oninput = e => { p.auto_sc_K = Math.max(0, +e.target.value || 0); maybeRun(); };
     const cg = document.getElementById("insChG"); if (cg) cg.oninput = e => { p.charge_g = +e.target.value || 650; maybeRun(); };
 
   } else if (SM.isSensorType(n.type)) {
@@ -1853,6 +1980,7 @@ function renderInspector() {
         ${resLineHTML("압력비 PR", `${n.result.metrics.PR.toFixed(2)}`, `node:${n.id}:PR`)}
         ${resLineHTML("냉매 질량유량 m_dot", `${n.result.outlet.m_dot.toFixed(4)} kg/s`, `node:${n.id}:m_dot`, "var(--green)")}
         ${resLineHTML("압축기 축동력 W_shaft", `${n.result.metrics.W_shaft_kW.toFixed(2)} kW`, `node:${n.id}:W_shaft_kW`, "var(--warn)")}
+        ${resLineHTML("소비전력 W_elec / 쉘열손실", `${(n.result.metrics.W_elec_kW||0).toFixed(2)} kW  |  ${(n.result.metrics.Q_shell_kW||0).toFixed(2)} kW`, `node:${n.id}:W_elec_kW`, "#d97706")}
         ${resLineHTML("등엔트로피 / 체적 효율", `η_is ${(n.result.metrics.eff_is*100).toFixed(1)}%  |  η_v ${(n.result.metrics.eff_vol*100).toFixed(1)}%`, `node:${n.id}:eff_is`)}
       </div>` : ""}`;
     document.getElementById("insLinkGlobal").onchange = e => { n.params.link_global = e.target.checked; maybeRun(); renderInspector(); };
@@ -1909,9 +2037,13 @@ function renderInspector() {
 
   } else {
     const p = n.params, sensors = nodes.filter(x => SM.isSensorType(x.type));
-    const D_mm = p.orifice_D_mm || 2.2, A_max = (Math.PI * D_mm * D_mm) / 4;
+    const D_mm = p.orifice_D_mm || 2.8, A_max = (Math.PI * D_mm * D_mm) / 4;
     const fc = p.flow_corr || "re_diam_cd";
-    const cdShow = n.result && n.result.metrics ? n.result.metrics.Cd_eff : VM.calcEffectiveCd(p, D_mm, 1150, 150, 0.035, A_max * 0.5e-6, 5.0);
+    const { refProp: curRefProp } = getActiveFluidInfo();
+    let prevRho = 1120, prevMu = 150;
+    if (n.result && n.result.inlet) { prevRho = n.result.inlet.rho; prevMu = n.result.inlet.mu; }
+    else if (curRefProp && curRefProp.sat) { const sp = curRefProp.getSatAtP(Math.min(12.5, curRefProp.sat.P[curRefProp.sat.P.length - 1] * 0.8)); prevRho = sp.rho_f; prevMu = sp.mu_f; }
+    const cdShow = n.result && n.result.metrics ? n.result.metrics.Cd_eff : VM.calcEffectiveCd(p, D_mm, prevRho, prevMu, 0.08, A_max * 0.5e-6, 5.0);
     inspectorBody.innerHTML = `<h2><span>${n.modelName}</span>${hdrBtns}</h2>${fluidBindHTML}
       <div class="field"><div class="field-row"><label>제어 모드</label><select id="insVMode"><option value="txv_sh" ${p.valve_mode==='txv_sh'?'selected':''}>TXV 과열도(센서)</option><option value="orifice" ${p.valve_mode==='orifice'?'selected':''}>수동 개도 오리피스</option><option value="fixed_p" ${p.valve_mode==='fixed_p'?'selected':''}>목표 저압 지정</option></select></div></div>
       <div class="field"><div class="field-row"><label>유량계수·초크 상관식</label><select id="insVCorr" style="width:148px;"><option value="re_diam_cd" ${fc==='re_diam_cd'?'selected':''}>가변 Cd(D, Re, SC)</option><option value="hem_choked" ${fc==='hem_choked'?'selected':''}>2상 초크 플로우(HEM)</option><option value="const_cd" ${fc==='const_cd'?'selected':''}>고정 유량계수 Cd</option></select></div></div>
@@ -2006,14 +2138,13 @@ let lastOriginTimePoints = [];
 function extractMetricFromSim(key, simNodes, simEdges, convergence) {
   const parts = key.split(":");
   if (parts[0] === "sys") {
-    const comp = simNodes.find(n => n.type === "compressor" && n.result);
-    const evap = simNodes.find(n => SM.isHxType(n.type) && n.result && !n.result.metrics.isCondenser);
-    const cond = simNodes.find(n => SM.isHxType(n.type) && n.result && n.result.metrics.isCondenser);
-    if (parts[1] === "COP") return (comp && evap && comp.result.metrics.W_shaft_kW > 0) ? (evap.result.metrics.Q_kW / comp.result.metrics.W_shaft_kW) : 0;
+    const en = convergence && convergence.conservation ? convergence.conservation.energy : null;
+    if (parts[1] === "COP") return en ? en.COP_comp : 0;
+    if (parts[1] === "COP_sys") return en ? en.COP_sys : 0;
     if (parts[1] === "charge_g") return convergence && convergence.conservation ? convergence.conservation.mass.total_g : 0;
-    if (parts[1] === "Q_evap") return evap ? evap.result.metrics.Q_kW : 0;
-    if (parts[1] === "Q_cond") return cond ? cond.result.metrics.Q_kW : 0;
-    if (parts[1] === "W_shaft") return comp ? comp.result.metrics.W_shaft_kW : 0;
+    if (parts[1] === "Q_evap") return en ? en.Q_evap : 0;
+    if (parts[1] === "Q_cond") return en ? en.Q_cond : 0;
+    if (parts[1] === "W_shaft") return en ? en.W_shaft : 0;
   } else if (parts[0] === "edge") {
     const ed = simEdges.find(e => e.id === parts[1]);
     if (!ed || !ed.stream) return 0;
@@ -2053,10 +2184,13 @@ function recomputeAndDrawOriginPlot() {
 
   const pts = [];
   const nSteps = Math.min(60, Math.max(5, Math.round(T_max / dt)));
+  let prevState = lastConvergence && lastConvergence.solutionState ? lastConvergence.solutionState : null;
+  if (!refProp) return;
   for (let i = 0; i <= nSteps; i++) {
     const t = Number(((T_max * i) / nSteps).toFixed(2));
-    const stepOpts = { ...baseOpts, simConfig: { ...cfg, t_sec: t } };
+    const stepOpts = { ...baseOpts, simConfig: { ...cfg, t_sec: t }, warmStart: prevState };
     const { simNodes, simEdges, convergence } = SM.solve(nodes, edges, fluidName, refProp, stepOpts);
+    if (convergence && convergence.converged && convergence.solutionState) prevState = convergence.solutionState;
     const row = { t };
     originSeriesList.forEach(s => {
       row[s.key] = extractMetricFromSim(s.key, simNodes, simEdges, convergence);
@@ -2165,7 +2299,7 @@ function drawOriginCanvas() {
     }
   }
   ctx.font = "bold 12px Arial, sans-serif";
-  ctx.fillText("Simulation Time, t [s]", pad.L + pW / 2, H - 8);
+  ctx.fillText("Quasi-Steady Scenario Time, t [s]", pad.L + pW / 2, H - 8);
 
   // Y축 눈금 (Major + Minor inward ticks)
   ctx.textAlign = "right"; ctx.font = "bold 11px Arial, sans-serif";
@@ -2255,14 +2389,14 @@ function loadSampleCircuit() {
   const comp = createNodeData("compressor", 145, 130, 270);
   const cond = createNodeData("hx_fin_plate", 360, 42, 0);
   cond.modelName = "응축기 (핀-플레이트)";
-  cond.params = { ...defaultHxParams("fin_plate"), fluidNodeId: rf.id, fin_type: "louver", ref_cond_corr: "shah_cond", sec_fluid: "Air", link_ambient: true, link_fan: true, T_sec_in: 35.0, m_sec_kgs: 1.2, m_sec_ref: 1.2 };
+  cond.params = { ...defaultHxParams("fin_plate"), fluidNodeId: rf.id, fin_type: "louver", fin_Cj_mult: 1.0, ref_cond_corr: "shah_cond", sec_fluid: "Air", link_ambient: true, link_fan: true, T_sec_in: 35.0, m_sec_kgs: 1.2, m_sec_ref: 1.2 };
 
   const valv = createNodeData("valve", 620, 130, 90);
   valv.modelName = "팽창밸브 (TXV)";
 
   const evap = createNodeData("hx_plate", 460, 230, 180);
   evap.modelName = "증발기 (판형 PHX)";
-  evap.params = { ...defaultHxParams("plate"), fluidNodeId: rf.id, ref_evap_corr: "yan_lin", sec_phe_corr: "muley_manglik", sec_fluid: "GW", link_ambient: false, link_fan: false, T_sec_in: 18.0, m_sec_kgs: 0.35 };
+  evap.params = { ...defaultHxParams("plate"), fluidNodeId: rf.id, ref_evap_corr: "han_lee_kim", sec_phe_corr: "martin", sec_fluid: "GW", link_ambient: false, link_fan: false, T_sec_in: 18.0, m_sec_kgs: 0.35 };
 
   const acc = createNodeData("accumulator", 265, 230, 180);
   acc.modelName = "어큐뮬레이터";
@@ -2278,11 +2412,11 @@ function loadSampleCircuit() {
 
   nodes.push(comp, cond, valv, evap, acc, sens, fanNode);
   edges.push(
-    { id: "e1", from: comp.id, to: cond.id, kind: "flow", stream: null },
-    { id: "e2", from: cond.id, to: valv.id, kind: "flow", stream: null },
-    { id: "e3", from: valv.id, to: evap.id, kind: "flow", stream: null },
-    { id: "e4", from: evap.id, to: acc.id, kind: "flow", stream: null },
-    { id: "e5", from: acc.id, to: comp.id, kind: "flow", stream: null },
+    { id: "e1", from: comp.id, to: cond.id, kind: "flow", pipe: { L_m: 0.8, D_mm: 12.0, eps_mm: 0.0015, dz_m: 0, UA_ins_WK: 0 }, stream: null },
+    { id: "e2", from: cond.id, to: valv.id, kind: "flow", pipe: { L_m: 0.8, D_mm: 10.0, eps_mm: 0.0015, dz_m: 0, UA_ins_WK: 0 }, stream: null },
+    { id: "e3", from: valv.id, to: evap.id, kind: "flow", pipe: { L_m: 0.5, D_mm: 12.0, eps_mm: 0.0015, dz_m: 0, UA_ins_WK: 0 }, stream: null },
+    { id: "e4", from: evap.id, to: acc.id, kind: "flow", pipe: { L_m: 0.8, D_mm: 16.0, eps_mm: 0.0015, dz_m: 0, UA_ins_WK: 0 }, stream: null },
+    { id: "e5", from: acc.id, to: comp.id, kind: "flow", pipe: { L_m: 0.8, D_mm: 16.0, eps_mm: 0.0015, dz_m: 0, UA_ins_WK: 0 }, stream: null },
     { id: "e6", from: fanNode.id, to: cond.id, kind: "air", stream: null }
   );
   sens.params.measureEdgeId = "e4"; // 증발기 출구 배관 계측
@@ -2298,7 +2432,7 @@ document.getElementById("sampleBtn").onclick = loadSampleCircuit;
 document.getElementById("clearBtn").onclick = () => { nodes = []; edges = []; selectedNodeIds.clear(); selectedEdgeId = null; switchTab("canvas"); renderChromeTabs(); setAppMode("sketch", false); };
 document.getElementById("saveJsonBtn").onclick = () => {
   const a = document.createElement("a");
-  a.href = URL.createObjectURL(new Blob([JSON.stringify({ simConfig: getSimConfig(), nodes: nodes.map(({ id, type, x, y, rot, modelName, params }) => ({ id, type, x, y, rot, modelName, params })), edges: edges.map(({ id, from, to, kind }) => ({ id, from, to, kind: kind || "flow" })) }, null, 2)], { type: "application/json" }));
+  a.href = URL.createObjectURL(new Blob([JSON.stringify({ simConfig: getSimConfig(), nodes: nodes.map(({ id, type, x, y, rot, modelName, params }) => ({ id, type, x, y, rot, modelName, params })), edges: edges.map(({ id, from, to, kind, pipe }) => ({ id, from, to, kind: kind || "flow", pipe })) }, null, 2)], { type: "application/json" }));
   a.download = "cycle_circuit.json"; a.click();
 };
 document.getElementById("loadJsonBtn").onclick = () => document.getElementById("jsonFileInput").click();
@@ -2318,7 +2452,13 @@ document.getElementById("jsonFileInput").onchange = e => {
       }
       nodes = (d.nodes || []).map(n => ({ ...n, result: null }));
       edges = (d.edges || []).map(ed => ({ ...ed, kind: ed.kind || "flow", stream: null }));
-      nextId = nodes.length + edges.length + 10;
+      // ID 충돌 버그 수정: 로드된 모든 노드/엣지 ID의 숫자 접미사 최댓값 + 1 로 nextId 산정
+      let maxNum = 0;
+      [...nodes, ...edges].forEach(obj => {
+        const m = String(obj.id || "").match(/(\d+)$/);
+        if (m) maxNum = Math.max(maxNum, parseInt(m[1], 10));
+      });
+      nextId = Math.max(maxNum + 1, nodes.length + edges.length + 1);
       selectedNodeIds = new Set(); selectedEdgeId = null; switchTab("canvas"); renderChromeTabs();
       if (appMode === "solver") runSimulation(true); else { renderNodes(); renderWires(); renderInspector(); }
     } catch { alert("올바른 JSON 파일이 아닙니다."); }
@@ -2326,7 +2466,7 @@ document.getElementById("jsonFileInput").onchange = e => {
   r.readAsText(f); e.target.value = "";
 };
 
-window.addEventListener("resize", () => { drawPlot(); if (activeTabId !== "canvas" && lastConvergence) drawSolverChart(lastConvergence.history, "dtSolverCanvas"); });
+window.addEventListener("resize", () => { drawPlot(); if (activeTabId !== "canvas" && lastConvergence) { drawSolverChart(lastConvergence.history, "dtSolverCanvas"); drawConservationChart(lastConvergence.history, "dtConsCanvas"); } });
 initFluidDB();
 syncPlotOptions();
 loadSampleCircuit();
