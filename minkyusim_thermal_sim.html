@@ -1,0 +1,2335 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>1D 냉동사이클 시뮬레이터 (CoolProp · TXV/센서 · 지오메트리 HX · 3대 보존법칙)</title>
+<style>
+  :root {
+    --bg: #0b1120; --panel: #1e293b; --panel-dark: #0f172a;
+    --border: #334155; --text: #f1f5f9; --muted: #94a3b8;
+    --accent: #38bdf8; --green: #22c55e; --warn: #f59e0b;
+    --hot: #f97316; --purple: #a78bfa; --danger: #ef4444;
+    --grid-line: #1e293b55; --node-fill: #1e293b; --pipe-casing: #475569;
+    --label-bg: #0f172aee; --btn-bg: #334155; --btn-border: #475569;
+  }
+  body.light-mode {
+    --bg: #f8fafc; --panel: #ffffff; --panel-dark: #f1f5f9;
+    --border: #cbd5e1; --text: #0f172a; --muted: #475569;
+    --accent: #0284c7; --green: #16a34a; --warn: #d97706;
+    --hot: #ea580c; --purple: #7c3aed; --danger: #dc2626;
+    --grid-line: #e2e8f0; --node-fill: #ffffff; --pipe-casing: #64748b;
+    --label-bg: #ffffffee; --btn-bg: #e2e8f0; --btn-border: #94a3b8;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: "Malgun Gothic", "Segoe UI", system-ui, sans-serif; background: var(--bg); color: var(--text); height: 100vh; display: flex; flex-direction: column; overflow: hidden; user-select: none; }
+  #errBanner { display: none; background: #7f1d1d; color: #fecaca; padding: 8px 16px; font-size: 12.5px; border-bottom: 1px solid #ef4444; }
+
+  /* 크롬 스타일 동적 탭 바 */
+  .chrome-tab-bar {
+    height: 36px; background: var(--panel-dark); border-bottom: 1px solid var(--border);
+    display: flex; align-items: flex-end; padding: 4px 8px 0; gap: 3px;
+    overflow-x: auto; flex-shrink: 0;
+  }
+  .chrome-tab-bar::-webkit-scrollbar { height: 4px; }
+  .chrome-tab-bar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  .c-tab {
+    display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px;
+    background: var(--btn-bg); color: var(--muted); border: 1px solid var(--border);
+    border-bottom: none; border-radius: 8px 8px 0 0; font-size: 11.5px; font-weight: 600;
+    cursor: pointer; white-space: nowrap; max-width: 195px;
+  }
+  .c-tab:hover { filter: brightness(0.97); color: var(--text); }
+  .c-tab.active {
+    background: var(--panel); color: var(--accent); border-color: var(--border);
+    border-top: 2px solid var(--accent); position: relative; top: 1px; padding-bottom: 6px;
+  }
+  .c-tab .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .c-tab .t-lbl { overflow: hidden; text-overflow: ellipsis; }
+
+  /* 간결한 메인 툴바 (스케치 모드 / 솔버 모드 전환) */
+  .toolbar { height: 42px; background: var(--panel); border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; padding: 0 10px; flex-shrink: 0; gap: 8px; }
+  .toolbar-left, .toolbar-right { display: flex; gap: 6px; align-items: center; }
+  .mode-group { display: inline-flex; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; background: var(--panel-dark); }
+  .mode-btn { border: none; border-radius: 0; padding: 5px 11px; font-size: 11.5px; font-weight: 700; background: transparent; color: var(--muted); }
+  .mode-btn.active-sketch { background: #0284c7; color: #fff; }
+  .mode-btn.active-solver { background: #15803d; color: #fff; }
+
+  button { background: var(--btn-bg); color: var(--text); border: 1px solid var(--btn-border); border-radius: 6px; padding: 4px 8px; font-size: 11.5px; cursor: pointer; white-space: nowrap; }
+  button:hover { filter: brightness(0.95); }
+  button.primary { background: #0284c7; border-color: #0ea5e9; color: #fff; font-weight: 600; }
+  button.green { background: #15803d; border-color: #22c55e; color: #fff; font-weight: 600; }
+  button.danger { background: #b91c1c; border-color: #ef4444; color: #fff; }
+  button.sm { padding: 3px 7px; font-size: 11px; }
+  .help-q-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 17px; height: 17px; border-radius: 50%; padding: 0; font-size: 10.5px; font-weight: 800;
+    background: #0284c722; color: var(--accent); border: 1px solid var(--accent); margin-left: 3px; vertical-align: middle;
+  }
+  .help-q-btn:hover { background: var(--accent); color: #fff; }
+
+  .page { display: none; flex: 1; min-height: 0; overflow: hidden; flex-direction: column; }
+  .page.active { display: flex; }
+
+  /* 솔버 모드: 시스템 해석 요약 + 전역 입구조건 패널 (우측 속성창 상단 고정 OR 각각 독립 플로팅 창 분리 지원!) */
+  .sys-kpi-banner {
+    display: none; background: var(--panel); border: 1.5px solid #22c55e88; border-radius: 10px;
+    padding: 10px 12px; margin-bottom: 10px; font-size: 13px; line-height: 1.8;
+    box-shadow: 0 3px 10px rgba(0,0,0,0.06);
+  }
+  .sys-kpi-banner.visible { display: block; }
+  .sys-kpi-banner.floating {
+    position: fixed; z-index: 62; width: 350px; left: 230px; top: 90px;
+    border: 2px solid #16a34a; box-shadow: 0 14px 36px rgba(0,0,0,0.24);
+  }
+  .sys-kpi-hdr { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding-bottom: 6px; margin-bottom: 6px; border-bottom: 1px solid var(--border); }
+  .sys-kpi-banner.floating .sys-kpi-hdr { cursor: move; }
+
+  .solver-dock {
+    display: none; background: var(--panel); border: 1.5px solid #0284c788; border-radius: 10px;
+    padding: 10px 12px; margin-bottom: 12px; font-size: 12px; flex-direction: column; gap: 7px;
+    box-shadow: 0 3px 10px rgba(0,0,0,0.06);
+  }
+  .solver-dock.visible { display: flex; }
+  .solver-dock.floating {
+    position: fixed; z-index: 61; width: 375px; left: 260px; top: 260px;
+    border: 2px solid #0284c7; border-radius: 10px; box-shadow: 0 14px 36px rgba(0,0,0,0.24);
+  }
+  .solver-dock-hdr { display: flex; align-items: center; justify-content: space-between; gap: 6px; flex-wrap: wrap; padding-bottom: 5px; border-bottom: 1px solid var(--border); }
+  .solver-dock.floating .solver-dock-hdr { cursor: move; }
+  .solver-dock-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .cfg-item { display: inline-flex; align-items: center; justify-content: space-between; gap: 5px; background: var(--panel-dark); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; flex: 1 1 135px; }
+  .cfg-item label { color: var(--muted); font-size: 11.5px; font-weight: 700; white-space: nowrap; }
+  .cfg-item input[type="number"] { width: 66px; padding: 2px 5px; font-size: 12px; font-weight: 700; text-align: right; background: var(--panel); }
+  .cfg-item select { padding: 2px 5px; font-size: 11.5px; background: var(--panel); }
+  .cons-pill { font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); background: var(--panel-dark); font-weight: 700; white-space: nowrap; }
+  .cons-pill.ok { border-color: #22c55e88; color: #15803d; background: #22c55e18; }
+  .cons-pill.warn { border-color: #f59e0b88; color: #b45309; background: #f59e0b18; }
+  .cons-pill.err { border-color: #ef4444; color: #dc2626; background: #ef444418; }
+
+  /* 결과창 가시성 대폭 강화 (한 줄씩 큼직하게 + 드래그하여 Origin 시계열 그래프 생성) */
+  .res-box { background: var(--panel); border: 1.5px solid var(--border); border-radius: 10px; padding: 12px 13px; margin-top: 10px; }
+  .res-box h3 { font-size: 13.5px; font-weight: 800; color: var(--green); margin-bottom: 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+  .res-line {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 7px 9px; margin-bottom: 7px; border-radius: 7px;
+    background: var(--panel-dark); border: 1px solid var(--border);
+    font-size: 13.5px; line-height: 1.45; transition: border-color 0.12s, transform 0.1s;
+  }
+  .res-line:last-child { margin-bottom: 0; }
+  .res-line[draggable="true"] { cursor: grab; }
+  .res-line[draggable="true"]:hover { border-color: var(--accent); background: #0284c712; transform: translateX(-2px); }
+  .res-line .r-lbl { color: var(--muted); font-weight: 700; font-size: 13px; display: flex; align-items: center; gap: 5px; }
+  .res-line .r-val { font-size: 14.5px; font-weight: 800; color: var(--text); }
+  .drag-hint-badge { font-size: 10px; font-weight: 700; color: var(--accent); background: #0284c718; border: 1px solid #0284c755; padding: 1px 6px; border-radius: 999px; }
+
+  /* 추가 포트 스타일 (공기 보조 포트 & 신호 포트) */
+  .port-air-in { border-color: #0891b2; background: #e0f2fe; }
+  .port-air-out { border-color: #06b6d4; background: #cffafe; }
+  .port-sig-out { border-color: #d97706; background: #fef3c7; }
+  .port-sig-in { border-color: #d97706; background: #fffbeb; }
+
+  /* OriginLab 스타일 시계열 플로팅 그래프 창 */
+  .origin-win {
+    position: fixed; z-index: 68; width: 520px; height: 360px; left: 250px; top: 130px;
+    background: #ffffff; color: #0f172a; border: 2px solid #0f172a; border-radius: 8px;
+    box-shadow: 0 16px 42px rgba(0,0,0,0.28); display: none; flex-direction: column;
+    resize: both; overflow: hidden;
+  }
+  .origin-win.open { display: flex; }
+  .origin-bar {
+    background: #0f172a; color: #ffffff; padding: 6px 10px; font-size: 12px; font-weight: 700;
+    display: flex; align-items: center; justify-content: space-between; cursor: move; flex-shrink: 0;
+  }
+  .origin-canvas-wrap { flex: 1; min-height: 0; padding: 8px 10px; background: #ffffff; position: relative; }
+  #originCanvas { width: 100%; height: 100%; display: block; background: #ffffff; }
+  .canvas-drop-hint {
+    position: absolute; inset: 14px; border: 2.5px dashed #0284c7; border-radius: 12px;
+    background: rgba(2,132,199,0.08); z-index: 25; display: none; align-items: center; justify-content: center;
+    font-size: 15px; font-weight: 800; color: #0284c7; pointer-events: none;
+  }
+  .canvas-drop-hint.active { display: flex; }
+
+  /* 우측 속성창 / 결과창 (가시성 향상 위해 365px 폭) */
+  .workspace { flex: 1; display: grid; grid-template-columns: 196px 1fr 365px; min-height: 0; overflow: hidden; }
+  .workspace.inspector-hidden { grid-template-columns: 196px 1fr; }
+  .workspace.inspector-hidden .inspector { display: none; }
+
+  /* 폴더화된 컴포넌트 팔레트 */
+  .palette { background: var(--panel-dark); border-right: 1px solid var(--border); padding: 8px; display: flex; flex-direction: column; gap: 6px; overflow-y: auto; }
+  .folder { border: 1px solid var(--border); border-radius: 8px; background: var(--panel); overflow: hidden; flex-shrink: 0; }
+  .folder-hdr { padding: 6px 8px; font-size: 11px; font-weight: 700; color: var(--text); background: var(--panel-dark); cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
+  .folder-hdr:hover { color: var(--accent); }
+  .folder-body { padding: 5px; display: flex; flex-direction: column; gap: 4px; }
+  .folder.collapsed .folder-body { display: none; }
+  .palette-item { background: var(--panel); border: 1px solid var(--border); border-radius: 7px; padding: 5px 7px; cursor: pointer; display: flex; align-items: center; gap: 7px; }
+  .palette-item:hover { border-color: var(--accent); background: var(--panel-dark); }
+  .palette-item .title { font-size: 11px; font-weight: 700; line-height: 1.2; }
+  .palette-item .desc { font-size: 9.5px; color: var(--muted); }
+  .palette-help { margin-top: auto; font-size: 10px; color: var(--muted); line-height: 1.45; background: var(--panel); padding: 7px; border-radius: 7px; border: 1px solid var(--border); }
+
+  /* 중앙 영역 + 선도 도킹 */
+  .center-col { flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; position: relative; }
+  .center-col.dock-right { flex-direction: row; }
+  .center-col.dock-right .plotter-resizer { width: 8px; height: auto; cursor: ew-resize; }
+  .center-col.dock-right .plotter-resizer::after { width: 3px; height: 44px; }
+  .center-col.dock-right .plotter { width: 42%; height: auto !important; min-width: 280px; border-left: 1px solid var(--border); }
+
+  .canvas-wrap {
+    flex: 1; min-height: 140px; min-width: 240px; position: relative; overflow: hidden;
+    background-color: var(--bg);
+    background-image: linear-gradient(to right, var(--grid-line) 1px, transparent 1px), linear-gradient(to bottom, var(--grid-line) 1px, transparent 1px);
+    background-size: 24px 24px;
+  }
+  /* Ctrl+휠 확대/축소 스테이지 */
+  #canvasStage { position: absolute; inset: 0; transform-origin: 0 0; }
+  #wireSvg { position: absolute; left: 0; top: 0; width: 3000px; height: 2200px; pointer-events: none; z-index: 1; overflow: visible; }
+  #labelLayer, #nodeLayer { position: absolute; left: 0; top: 0; }
+
+  /* 유체 온도 범례 (확대된 크기 & 깔끔한 문구) */
+  .cfd-legend {
+    position: absolute; left: 12px; bottom: 12px; z-index: 8;
+    background: var(--label-bg); border: 1.5px solid var(--border); border-radius: 9px;
+    padding: 8px 12px; pointer-events: none; box-shadow: 0 3px 10px rgba(0,0,0,0.1);
+  }
+  .cfd-legend-title { font-size: 12px; font-weight: 800; color: var(--text); margin-bottom: 4px; }
+  .cfd-bar {
+    width: 224px; height: 14px; border-radius: 5px; margin: 2px 0 4px; border: 1px solid #cbd5e1;
+    background: linear-gradient(to right, rgb(29,78,216), rgb(6,182,212), rgb(34,197,94), rgb(245,158,11), rgb(220,38,38));
+  }
+  .cfd-ticks { display: flex; justify-content: space-between; font-size: 10.5px; font-weight: 700; color: var(--muted); }
+
+  .zoom-pill {
+    position: absolute; right: 12px; bottom: 12px; z-index: 8;
+    background: var(--label-bg); border: 1px solid var(--border); border-radius: 999px;
+    padding: 4px 10px; font-size: 11px; font-weight: 700; color: var(--muted); cursor: pointer;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+  }
+  .zoom-pill:hover { border-color: var(--accent); color: var(--accent); }
+
+  #validationBanner {
+    position: absolute; top: 8px; left: 50%; transform: translateX(-50%); z-index: 12;
+    display: none; background: #fef2f2ee; color: #991b1b; border: 1.5px solid #ef4444;
+    border-radius: 8px; padding: 6px 12px; font-size: 11.5px; font-weight: 600;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.12); max-width: 90%; text-align: center;
+  }
+
+  .pipe-group { cursor: pointer; pointer-events: stroke; }
+  .pipe-casing { fill: none; stroke: var(--pipe-casing); stroke-width: 11; stroke-linecap: round; stroke-linejoin: round; pointer-events: stroke; }
+  .pipe-core { fill: none; stroke-width: 7; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
+  .pipe-flow { fill: none; stroke: rgba(255,255,255,0.8); stroke-width: 2.2; stroke-dasharray: 6 12; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; animation: pipeFlow 1.1s linear infinite; }
+  @keyframes pipeFlow { from { stroke-dashoffset: 18; } to { stroke-dashoffset: 0; } }
+  .pipe-group:hover .pipe-casing { stroke: var(--accent); stroke-width: 13; }
+  .pipe-group.selected .pipe-casing { stroke: #0284c7; stroke-width: 14; }
+  .pipe-mismatch .pipe-casing { stroke: #dc2626 !important; stroke-dasharray: 6 4; }
+  .signal-line { fill: none; stroke: #16a34a; stroke-width: 2.2; stroke-dasharray: 5 4; pointer-events: none; }
+  .tap-line { fill: none; stroke: #0284c7; stroke-width: 1.8; stroke-dasharray: 3 3; pointer-events: none; }
+
+  .temp-wire { fill: none; stroke: var(--accent); stroke-width: 3; stroke-dasharray: 6 4; }
+  #selectBox { position: absolute; display: none; z-index: 10; pointer-events: none; background: #38bdf822; border: 1.5px dashed var(--accent); border-radius: 3px; }
+  .pipe-label { position: absolute; transform: translate(-50%, -50%); background: var(--label-bg); color: var(--text); border: 1.5px solid var(--border); border-radius: 6px; padding: 2px 6px; font-size: 10px; white-space: nowrap; z-index: 3; pointer-events: none; box-shadow: 0 2px 6px rgba(0,0,0,0.1); }
+
+  /* 노드 크기: 일반 100px, 솔버/냉매/센서는 컴팩트 64px */
+  .node { position: absolute; width: 100px; height: 100px; background: transparent; z-index: 2; cursor: move; }
+  .node-svg-wrap { width: 100%; height: 100%; transition: transform 0.15s ease; }
+  .node.node-compact { width: 64px; height: 64px; }
+  .node.node-compact .node-caption { top: 65px; font-size: 9.5px; }
+  .node svg { display: block; overflow: visible; }
+  .node.selected svg { filter: drop-shadow(0 0 8px var(--accent)); }
+  .node:hover .node-del { opacity: 1; }
+  .node-del { position: absolute; top: -6px; right: -6px; width: 18px; height: 18px; border-radius: 50%; background: #991b1b; color: #fff; border: 1px solid #ef4444; font-size: 12px; line-height: 15px; text-align: center; cursor: pointer; opacity: 0; z-index: 6; padding: 0; }
+  .node-caption { position: absolute; top: 100px; left: 50%; transform: translateX(-50%); text-align: center; white-space: nowrap; pointer-events: none; background: var(--label-bg); color: var(--text); padding: 2px 6px; border-radius: 6px; border: 1px solid var(--border); font-size: 10px; line-height: 1.3; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
+  @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  .spin-impeller { transform-origin: 50px 50px; animation: spin 2s linear infinite; }
+
+  .port { position: absolute; width: 13px; height: 13px; border-radius: 50%; background: var(--panel); border: 2.5px solid var(--accent); transform: translate(-50%, -50%); cursor: crosshair; z-index: 5; }
+  .port:hover { background: var(--accent); transform: translate(-50%, -50%) scale(1.3); }
+  .port-in { border-color: #0284c7; }
+  .port-out { border-color: #f97316; }
+
+  /* 선도(플랏터) */
+  .plotter-resizer { height: 8px; background: var(--border); cursor: ns-resize; flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
+  .plotter-resizer:hover { background: var(--accent); }
+  .plotter-resizer::after { content: ""; width: 44px; height: 3px; border-radius: 2px; background: var(--muted); }
+  .plotter { height: 255px; background: var(--panel-dark); display: flex; flex-direction: column; flex-shrink: 0; min-height: 150px; }
+  .plotter.floating {
+    position: fixed; z-index: 55; width: 640px; height: 420px; left: 240px; top: 140px;
+    border: 2px solid var(--accent); border-radius: 10px; box-shadow: 0 12px 32px rgba(0,0,0,0.22);
+    resize: both; overflow: hidden;
+  }
+  .plotter.floating .plotter-bar { cursor: move; }
+  .plotter-bar { background: var(--panel); border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 5px; padding: 5px 8px; font-size: 11px; flex-wrap: wrap; flex-shrink: 0; }
+  .plotter-bar select { background: var(--panel-dark); color: var(--accent); border: 1px solid var(--border); border-radius: 5px; padding: 2px 5px; font-size: 11px; }
+  .plotter-canvas-wrap { flex: 1; min-height: 0; padding: 6px 8px; display: flex; position: relative; }
+  #plotCanvas { width: 100%; height: 100%; display: block; background: #ffffff; border-radius: 6px; border: 1px solid #cbd5e1; cursor: crosshair; }
+
+  /* 우측 속성창 / 결과창 */
+  .inspector { background: var(--panel-dark); border-left: 1px solid var(--border); padding: 10px; overflow-y: auto; user-select: text; }
+  .inspector h2, .card h2 { font-size: 13px; color: var(--accent); margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px; }
+  .sec-hdr { font-size: 11px; font-weight: 700; color: var(--accent); border-bottom: 1px solid var(--border); padding-bottom: 3px; margin: 9px 0 6px; }
+  .field { margin-bottom: 6px; }
+  .field-row { display: flex; justify-content: space-between; align-items: center; font-size: 11.5px; margin-bottom: 2px; gap: 6px; }
+  .field-row label { color: var(--muted); }
+  input[type="number"], input[type="text"], select, textarea { background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 7px; font-size: 11.5px; }
+  input[type="number"] { width: 82px; text-align: right; }
+  select.full { width: 100%; }
+  textarea { width: 100%; height: 105px; font-family: Consolas, monospace; font-size: 11px; margin-top: 4px; }
+  .sub-tabs { display: flex; gap: 4px; margin-bottom: 5px; flex-wrap: wrap; }
+  .sub-btn { background: var(--panel); color: var(--muted); border: 1px solid var(--border); padding: 3px 7px; font-size: 11px; border-radius: 5px; }
+  .sub-btn.active { background: #0284c7; color: #fff; border-color: #38bdf8; }
+  .res-box { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 9px; margin-top: 8px; font-size: 11.5px; line-height: 1.65; }
+  .res-box h3 { font-size: 12px; color: var(--green); margin-bottom: 4px; }
+  .sys-kpi-banner { background: #22c55e14; border: 1.5px solid #22c55e66; border-radius: 8px; padding: 8px 10px; margin-bottom: 10px; font-size: 11.5px; line-height: 1.65; }
+  .chk-line { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text); margin: 4px 0; cursor: pointer; }
+
+  .single-layout { flex: 1; display: grid; grid-template-columns: 395px 1fr; gap: 16px; padding: 14px; overflow-y: auto; user-select: text; }
+  .prop-layout { flex: 1; padding: 14px; overflow-y: auto; user-select: text; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 13px; margin-bottom: 12px; }
+  .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 12px; }
+  .kpi { background: var(--panel); border: 1px solid var(--border); border-radius: 9px; padding: 10px 12px; }
+  .kpi .lbl { font-size: 11px; color: var(--muted); }
+  .kpi .val { font-size: 16px; font-weight: 700; margin-top: 3px; }
+  .kpi .sub { font-size: 10.5px; color: var(--muted); margin-top: 2px; }
+  .doc-card { background: var(--panel-dark); border: 1px solid var(--border); border-radius: 8px; padding: 10px; margin-bottom: 8px; font-size: 11.5px; line-height: 1.6; }
+  .doc-card h3 { color: var(--accent); font-size: 12.5px; margin-bottom: 3px; }
+  .doc-card code { background: var(--panel); color: var(--warn); padding: 1px 5px; border-radius: 4px; font-size: 11px; }
+  .pt-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(145px, 1fr)); gap: 7px; margin-top: 10px; }
+  .pt-cell { background: var(--panel-dark); border: 1px solid var(--border); border-radius: 7px; padding: 7px 9px; }
+  .pt-cell .lbl { font-size: 10px; color: var(--muted); }
+  .pt-cell .val { font-size: 13.5px; font-weight: 700; margin-top: 2px; color: var(--text); }
+  .pt-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 12px; }
+  .pt-table th, .pt-table td { border: 1px solid var(--border); padding: 5px 9px; text-align: right; }
+  .pt-table th { background: var(--panel-dark); color: var(--muted); text-align: center; font-weight: 700; }
+  .pt-table td:first-child { text-align: left; font-weight: 600; color: var(--muted); }
+
+  /* 상관식 ? 도움말 모달 */
+  .modal-backdrop {
+    display: none; position: fixed; inset: 0; background: rgba(15,23,42,0.45); z-index: 100;
+    align-items: center; justify-content: center; padding: 20px;
+  }
+  .modal-backdrop.open { display: flex; }
+  .modal-box {
+    background: var(--panel); color: var(--text); border: 1.5px solid var(--accent); border-radius: 12px;
+    max-width: 680px; width: 100%; max-height: 85vh; overflow-y: auto; padding: 18px 20px;
+    box-shadow: 0 18px 48px rgba(0,0,0,0.28); user-select: text;
+  }
+  .modal-box h2 { font-size: 15px; color: var(--accent); margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center; }
+  .modal-sec { margin-top: 11px; font-size: 12.5px; line-height: 1.7; }
+  .modal-sec h4 { font-size: 12px; color: var(--green); margin-bottom: 4px; }
+  .modal-formula { background: var(--panel-dark); border: 1px solid var(--border); border-radius: 7px; padding: 9px 12px; font-family: Consolas, monospace; font-size: 11.5px; white-space: pre-wrap; color: var(--text); }
+</style>
+</head>
+<body class="light-mode">
+
+<div id="errBanner">
+  <b>모듈 로드 오류:</b> 같은 폴더에 모든 JS 모듈 파일이 있는지 확인해 주세요.
+</div>
+
+<!-- 크롬 스타일 동적 탭 바 -->
+<div class="chrome-tab-bar" id="chromeTabBar"></div>
+
+<!-- 간결한 메인 툴바 (스케치 모드 / 솔버 모드) -->
+<div class="toolbar">
+  <div class="toolbar-left">
+    <div class="mode-group">
+      <button class="mode-btn active-sketch" id="sketchModeBtn">✏️ 스케치 모드</button>
+      <button class="mode-btn" id="solverModeBtn">▶ 실행 (솔버 모드)</button>
+    </div>
+    <button id="sampleBtn">기본배치</button>
+    <button id="saveJsonBtn">저장</button>
+    <button id="loadJsonBtn">열기</button>
+    <input type="file" id="jsonFileInput" accept=".json" style="display:none;" />
+    <button class="danger" id="clearBtn">초기화</button>
+  </div>
+  <div class="toolbar-right">
+    <button id="toggleInspectorBtn">◧ 속성창 숨기기</button>
+    <button id="themeToggleBtn">🌙 다크</button>
+  </div>
+</div>
+
+<!-- [탭 1] 통합 캔버스 -->
+<div id="page-canvas" class="page active">
+  <div class="workspace" id="workspaceEl">
+    <!-- 폴더화된 컴포넌트 라이브러리 -->
+    <div class="palette">
+      <div class="folder">
+        <div class="folder-hdr"><span>📁 시스템 제어 (필수)</span><span>▾</span></div>
+        <div class="folder-body">
+          <div class="palette-item" data-add="solver">
+            <svg width="24" height="20" viewBox="0 0 28 24"><rect x="3" y="3" width="22" height="18" rx="4" fill="#0284c722" stroke="#0284c7" stroke-width="2"/><circle cx="14" cy="12" r="4" fill="none" stroke="#0284c7" stroke-width="2"/></svg>
+            <div><div class="title" style="color:#0284c7;">솔버 (Solver)</div><div class="desc">비연결 · 실행 필수</div></div>
+          </div>
+          <div class="palette-item" data-add="refrigerant">
+            <svg width="24" height="20" viewBox="0 0 28 24"><polygon points="14,2 24,14 14,22 4,14" fill="#06b6d422" stroke="#0891b2" stroke-width="2"/></svg>
+            <div><div class="title" style="color:#0891b2;">냉매 (Fluid)</div><div class="desc">CoolProp · 충전량</div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="folder">
+        <div class="folder-hdr"><span>📁 압축 · 팽창</span><span>▾</span></div>
+        <div class="folder-body">
+          <div class="palette-item" data-add="compressor">
+            <svg width="24" height="20" viewBox="0 0 32 24"><polygon points="3,2 29,7 29,17 3,22" fill="#f9731622" stroke="#ea580c" stroke-width="2"/></svg>
+            <div><div class="title" style="color:#ea580c;">압축기 (Comp)</div><div class="desc">2D 효율맵 · 스크롤</div></div>
+          </div>
+          <div class="palette-item" data-add="valve">
+            <svg width="24" height="20" viewBox="0 0 32 24"><polygon points="4,4 16,12 4,20" fill="#a78bfa22" stroke="#7c3aed" stroke-width="2"/><polygon points="28,4 16,12 28,20" fill="#a78bfa22" stroke="#7c3aed" stroke-width="2"/></svg>
+            <div><div class="title" style="color:#7c3aed;">팽창밸브 (TXV/EEV)</div><div class="desc">지름 D · 센서 피드백</div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="folder">
+        <div class="folder-hdr"><span>📁 열교환기류</span><span>▾</span></div>
+        <div class="folder-body">
+          <div class="palette-item" data-add="hx_fin_plate">
+            <svg width="24" height="20" viewBox="0 0 32 24"><rect x="3" y="3" width="26" height="18" rx="3" fill="#22c55e22" stroke="#16a34a" stroke-width="2"/><polyline points="6,9 11,15 16,9 21,15 26,9" fill="none" stroke="#0284c7" stroke-width="1.8"/></svg>
+            <div><div class="title" style="color:#16a34a;">핀-플레이트 HX</div><div class="desc">루버/플랫핀 · Shah</div></div>
+          </div>
+          <div class="palette-item" data-add="hx_plate">
+            <svg width="24" height="20" viewBox="0 0 32 24"><rect x="3" y="3" width="26" height="18" rx="3" fill="#0284c722" stroke="#0284c7" stroke-width="2"/><line x1="10" y1="4" x2="10" y2="20" stroke="#16a34a" stroke-width="1.8"/><line x1="16" y1="4" x2="16" y2="20" stroke="#0284c7" stroke-width="1.8"/><line x1="22" y1="4" x2="22" y2="20" stroke="#16a34a" stroke-width="1.8"/></svg>
+            <div><div class="title" style="color:#0284c7;">판형 HX (PHX)</div><div class="desc">Yan-Lin · Han-Lee-Kim</div></div>
+          </div>
+          <div class="palette-item" data-add="fan">
+            <svg width="24" height="20" viewBox="0 0 28 24"><circle cx="14" cy="12" r="9.5" fill="#0891b222" stroke="#0891b2" stroke-width="2"/><circle cx="14" cy="12" r="3" fill="#0891b2"/><path d="M 14 12 Q 19 6 21 11 Z M 14 12 Q 19 18 14 19 Z M 14 12 Q 7 15 9 9 Z" fill="#06b6d4"/></svg>
+            <div><div class="title" style="color:#0891b2;">팬 / 블로워 (Fan)</div><div class="desc">P-Q 펌프곡선 필수</div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="folder">
+        <div class="folder-hdr"><span>📁 탱크 · 버퍼</span><span>▾</span></div>
+        <div class="folder-body">
+          <div class="palette-item" data-add="accumulator">
+            <svg width="24" height="20" viewBox="0 0 32 24"><rect x="9" y="2" width="14" height="20" rx="6" fill="#0ea5e922" stroke="#0284c7" stroke-width="2"/><rect x="10" y="13" width="12" height="8" rx="4" fill="#06b6d466"/></svg>
+            <div><div class="title" style="color:#0284c7;">어큐뮬레이터 (기본)</div><div class="desc">저압 기액분리 (D·H)</div></div>
+          </div>
+          <div class="palette-item" data-add="receiver">
+            <svg width="24" height="20" viewBox="0 0 32 24"><rect x="9" y="2" width="14" height="20" rx="6" fill="#22c55e22" stroke="#16a34a" stroke-width="2"/><rect x="10" y="10" width="12" height="11" rx="4" fill="#16a34a66"/></svg>
+            <div><div class="title" style="color:#16a34a;">고압 액 리시버</div><div class="desc">고압 액 버퍼 (D·H)</div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="folder">
+        <div class="folder-hdr"><span>📁 센서류</span><span>▾</span></div>
+        <div class="folder-body">
+          <div class="palette-item" data-add="sensor_sh">
+            <svg width="24" height="20" viewBox="0 0 28 24"><circle cx="14" cy="12" r="9" fill="#16a34a22" stroke="#16a34a" stroke-width="2"/><text x="14" y="15" text-anchor="middle" font-size="8" font-weight="700" fill="#15803d">SH</text></svg>
+            <div><div class="title" style="color:#15803d;">과열도 센서 (P+T)</div><div class="desc">TXV 감온통 피드백</div></div>
+          </div>
+          <div class="palette-item" data-add="sensor_p">
+            <svg width="24" height="20" viewBox="0 0 28 24"><circle cx="14" cy="12" r="9" fill="#0284c722" stroke="#0284c7" stroke-width="2"/><text x="14" y="15" text-anchor="middle" font-size="9" font-weight="700" fill="#0284c7">P</text></svg>
+            <div><div class="title" style="color:#0284c7;">압력 센서 (P)</div><div class="desc">배관 압력 계측</div></div>
+          </div>
+          <div class="palette-item" data-add="sensor_t">
+            <svg width="24" height="20" viewBox="0 0 28 24"><circle cx="14" cy="12" r="9" fill="#ea580c22" stroke="#ea580c" stroke-width="2"/><text x="14" y="15" text-anchor="middle" font-size="9" font-weight="700" fill="#ea580c">T</text></svg>
+            <div><div class="title" style="color:#ea580c;">온도 센서 (T)</div><div class="desc">배관 온도 계측</div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="folder">
+        <div class="folder-hdr"><span>📁 신호 · 입력 소스 (탭 생략)</span><span>▾</span></div>
+        <div class="folder-body">
+          <div class="palette-item" data-add="sig_const">
+            <svg width="24" height="20" viewBox="0 0 28 24"><rect x="3" y="4" width="22" height="16" rx="4" fill="#d9770622" stroke="#d97706" stroke-width="2"/><line x1="7" y1="12" x2="21" y2="12" stroke="#d97706" stroke-width="2.2"/></svg>
+            <div><div class="title" style="color:#d97706;">상수 신호 (Const)</div><div class="desc">고정열부하 Q · RPM</div></div>
+          </div>
+          <div class="palette-item" data-add="sig_step">
+            <svg width="24" height="20" viewBox="0 0 28 24"><rect x="3" y="4" width="22" height="16" rx="4" fill="#7c3aed22" stroke="#7c3aed" stroke-width="2"/><polyline points="6,16 14,16 14,8 22,8" fill="none" stroke="#7c3aed" stroke-width="2"/></svg>
+            <div><div class="title" style="color:#7c3aed;">계단함수 신호 (Step)</div><div class="desc">t_step 스텝 입력</div></div>
+          </div>
+          <div class="palette-item" data-add="sig_scenario">
+            <svg width="24" height="20" viewBox="0 0 28 24"><rect x="3" y="4" width="22" height="16" rx="4" fill="#0284c722" stroke="#0284c7" stroke-width="2"/><polyline points="6,16 11,9 17,14 22,7" fill="none" stroke="#0284c7" stroke-width="2"/></svg>
+            <div><div class="title" style="color:#0284c7;">시나리오 함수 (f(t))</div><div class="desc">시간별 시나리오 보간</div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="palette-help">
+        <b>조작 단축키</b><br>• <b>Ctrl + 휠</b> → 화면 확대/축소<br>• 노드 <b>더블클릭</b> → 상세 탭<br>• <b>R 키</b> → 90° 회전<br>• 솔버모드: 배관/노드 클릭 → 결과
+      </div>
+    </div>
+
+    <!-- 중앙 캔버스 + 도킹/분리 가능 플랏터 -->
+    <div class="center-col" id="centerCol">
+      <div class="canvas-wrap" id="canvasWrap">
+        <div id="validationBanner"></div>
+        <div class="canvas-drop-hint" id="canvasDropHint">📈 여기에 결과 항목을 놓으면 시간에 따른 Origin 그래프가 그려집니다!</div>
+        <div id="canvasStage">
+          <svg id="wireSvg"></svg>
+          <div id="labelLayer"></div>
+          <div id="nodeLayer"></div>
+        </div>
+        <div id="selectBox"></div>
+        <div class="cfd-legend">
+          <div class="cfd-legend-title">유체 온도 [°C]</div>
+          <div class="cfd-bar"></div>
+          <div class="cfd-ticks"><span>-20°C</span><span>5°C</span><span>30°C</span><span>55°C</span><span>85°C+</span></div>
+        </div>
+        <div class="zoom-pill" id="zoomPill" title="클릭 시 100% 원위치">🔍 100%</div>
+      </div>
+
+      <div class="plotter-resizer" id="plotterResizer" title="드래그해 선도 크기를 조절하세요"></div>
+
+      <div class="plotter" id="plotterPanel">
+        <div class="plotter-bar" id="plotterDragHandle">
+          <strong style="color:var(--accent);">📈 선도</strong>
+          <select id="plotMode"><option value="ph">P-h 선도</option><option value="ts">T-s 선도</option><option value="sweep">파라미터 스윕</option></select>
+          <select id="sweepX" style="display:none;"><option value="rpm">X축: RPM</option><option value="p2">X축: P2</option></select>
+          <select id="plotY" style="display:none;"></select>
+          <label id="lblXLog" style="display:inline-flex;align-items:center;gap:2px;cursor:pointer;"><input type="checkbox" id="plotXLog" />X Log</label>
+          <label id="lblYLog" style="display:inline-flex;align-items:center;gap:2px;cursor:pointer;"><input type="checkbox" id="plotYLog" checked />Y Log</label>
+          <label id="lblIso1" style="display:inline-flex;align-items:center;gap:2px;cursor:pointer;"><input type="checkbox" id="chkIsoMain" checked />등온/압</label>
+          <label id="lblIsoX" style="display:inline-flex;align-items:center;gap:2px;cursor:pointer;"><input type="checkbox" id="chkIsoX" checked />등건도</label>
+          <label id="lblIsoRho" style="display:inline-flex;align-items:center;gap:2px;cursor:pointer;"><input type="checkbox" id="chkIsoRho" />등밀도</label>
+          <button class="sm" id="autoScaleBtn">자동</button>
+          <span style="margin-left:auto;display:flex;gap:4px;align-items:center;">
+            <button class="sm" id="dockBottomBtn">⬇ 하단</button>
+            <button class="sm" id="dockRightBtn">➡ 우측</button>
+            <button class="sm primary" id="floatPlotBtn">🗗 창 분리</button>
+            <button class="sm" id="copyPlotBtn">📋</button>
+            <button class="sm green" id="exportCsvBtn">📥</button>
+          </span>
+        </div>
+        <div class="plotter-canvas-wrap"><canvas id="plotCanvas"></canvas></div>
+      </div>
+    </div>
+
+    <!-- 우측 속성창(스케치모드) / 결과창(솔버모드) -->
+    <div class="inspector" id="inspector">
+      <!-- 1. 시스템 해석 요약 (솔버 모드 시 표시 · 창 분리 가능) -->
+      <div class="sys-kpi-banner" id="sysSummaryPanel">
+        <div class="sys-kpi-hdr" id="sysSummaryHandle">
+          <strong style="color:#15803d;font-size:13.5px;">📊 시스템 해석 요약</strong>
+          <button class="sm primary" id="floatSysSummaryBtn">🗗 창 분리</button>
+        </div>
+        <div id="sysSummaryBody"></div>
+      </div>
+
+      <!-- 2. 솔버 전역 입구조건 & 시뮬레이션 시간 (시스템 해석 요약 바로 밑에 구분 위치 · 창 분리 가능) -->
+      <div class="solver-dock" id="solverDockPanel">
+        <div class="solver-dock-hdr" id="solverDockHandle">
+          <strong style="color:#0284c7;font-size:13px;">🧮 솔버 전역 입구조건 &amp; 시간</strong>
+          <div style="display:flex;gap:4px;align-items:center;">
+            <button class="green sm" id="svReRunBtn">▶ 재계산</button>
+            <button class="sm primary" id="floatSolverBtn">🗗 창 분리</button>
+          </div>
+        </div>
+        <div class="solver-dock-row">
+          <span class="cons-pill" id="svStatusPill">대기</span>
+          <span class="cons-pill" id="pillMass">질량: -</span>
+          <span class="cons-pill" id="pillEnergy">에너지: -</span>
+          <span class="cons-pill" id="pillMomentum">모멘텀: -</span>
+        </div>
+        <div class="solver-dock-row">
+          <div class="cfg-item"><label>압축기 RPM</label><input type="number" id="cfgCompRpm" value="3000" step="100" min="500" max="9000"></div>
+          <div class="cfg-item"><label>외기온도 [°C]</label><input type="number" id="cfgTamb" value="35.0" step="1.0" min="-30" max="60"></div>
+          <div class="cfg-item"><label>팬 RPM</label><input type="number" id="cfgFanRpm" value="1800" step="100" min="200" max="6000"></div>
+          <div class="cfg-item"><label>현재 시각 t [s]</label><input type="number" id="cfgTimeSec" value="0" step="1" min="0" max="3600"></div>
+          <div class="cfg-item"><label style="color:#0284c7;">총 시뮬 시간 T [s]</label><input type="number" id="cfgSimDuration" value="30" step="5" min="1" max="3600"></div>
+          <div class="cfg-item"><label style="color:#0284c7;">시간 간격 dt [s]</label><input type="number" id="cfgSimDt" value="1.0" step="0.5" min="0.2" max="60"></div>
+        </div>
+        <div class="solver-dock-row">
+          <div class="cfg-item" style="flex:1 1 100%;"><label>수치기법</label>
+            <select id="dockNumMethod">
+              <option value="newton_secant">준-뉴턴/할선법</option>
+              <option value="fixed_point">고정점 완화</option>
+              <option value="aitken">Aitken Δ²</option>
+            </select>
+          </div>
+          <label class="chk-line" style="margin:0;"><input type="checkbox" id="dockGovMass" checked/>질량</label>
+          <label class="chk-line" style="margin:0;"><input type="checkbox" id="dockGovEnergy" checked/>에너지(P2)</label>
+          <label class="chk-line" style="margin:0;"><input type="checkbox" id="dockGovMom" checked/>모멘텀(ΔP)</label>
+        </div>
+      </div>
+
+      <!-- 3. 선택된 컴포넌트 / 배관 상세 결과 및 속성 본문 -->
+      <div id="inspectorBody">
+        <h2>속성 편집기</h2>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- OriginLab 스타일 시계열 그래프 플로팅 창 (결과값 드래그 앤 드롭) -->
+<div class="origin-win" id="originPlotWin">
+  <div class="origin-bar" id="originPlotHandle">
+    <span id="originPlotTitle">📈 Origin Time-Series Plot — Variable vs. Time [s]</span>
+    <div style="display:flex;gap:5px;align-items:center;">
+      <button class="sm" id="originClearSeriesBtn" style="background:#334155;color:#fff;border-color:#475569;">초기화</button>
+      <button class="sm green" id="originExportCsvBtn">📥 CSV</button>
+      <button class="sm danger" id="originCloseBtn">✕</button>
+    </div>
+  </div>
+  <div class="origin-canvas-wrap">
+    <canvas id="originCanvas"></canvas>
+  </div>
+</div>
+
+<!-- [동적 컴포넌트 상세 탭] -->
+<div id="page-detail" class="page"></div>
+
+<!-- 상관식 ? 상세 설명 모달 -->
+<div class="modal-backdrop" id="corrHelpModal">
+  <div class="modal-box">
+    <h2><span id="corrModalTitle">상관식 상세 설명</span><button class="sm danger" id="closeCorrModal">✕ 닫기</button></h2>
+    <div id="corrModalCat" style="font-size:11.5px;color:var(--muted);margin-bottom:8px;"></div>
+    <div class="modal-sec"><h4>1. 물리적 메커니즘</h4><div id="corrModalMech"></div></div>
+    <div class="modal-sec"><h4>2. 지배 수식 &amp; 무차원수</h4><div class="modal-formula" id="corrModalForm"></div></div>
+    <div class="modal-sec"><h4>3. 주요 입력 계수 및 의미</h4><ul id="corrModalParams" style="padding-left:18px;"></ul></div>
+    <div class="modal-sec"><h4>4. 시뮬레이터 수치 구현 방식</h4><div id="corrModalImpl"></div></div>
+  </div>
+</div>
+
+<script src="./fluid_data_coolprop.js"></script>
+<script src="./fluid_prop.js"></script>
+<script src="./correlations_doc.js"></script>
+<script src="./compressor.js"></script>
+<script src="./heat_exchanger.js"></script>
+<script src="./expansion_valve.js"></script>
+<script src="./receiver.js"></script>
+<script src="./fan.js"></script>
+<script src="./solver.js"></script>
+<script src="./component_views.js"></script>
+
+<script>
+const FP = window.FluidPropModule, CM = window.CompressorModule, HX = window.HXModule, VM = window.ValveModule, RM = window.ReceiverModule, FM = window.FanModule, SM = window.SolverModule, CV = window.ComponentViewsModule, CD = window.CorrDocsModule;
+if (!FP || !CM || !HX || !VM || !RM || !FM || !SM || !CV || !CD) { document.getElementById("errBanner").style.display = "block"; throw new Error("JS 모듈 로드 실패"); }
+
+// ================= 상관식 ? 도움말 모달 =================
+const corrModal = document.getElementById("corrHelpModal");
+function openCorrHelp(key) {
+  const doc = CD.CORR_DOCS[key];
+  if (!doc) return;
+  document.getElementById("corrModalTitle").textContent = doc.title;
+  document.getElementById("corrModalCat").textContent = doc.category;
+  document.getElementById("corrModalMech").textContent = doc.mechanism;
+  document.getElementById("corrModalForm").textContent = doc.formula;
+  document.getElementById("corrModalParams").innerHTML = doc.params.map(x => `<li>${x}</li>`).join("");
+  document.getElementById("corrModalImpl").textContent = doc.implementation;
+  corrModal.classList.add("open");
+}
+document.getElementById("closeCorrModal").onclick = () => corrModal.classList.remove("open");
+corrModal.onclick = e => { if (e.target === corrModal) corrModal.classList.remove("open"); };
+
+// ================= 앱 모드 (sketch / solver), 테마, 속성창 토글, 폴더 =================
+let appMode = "sketch"; // "sketch" | "solver"
+let selectedEdgeId = null;
+
+const sketchModeBtn = document.getElementById("sketchModeBtn");
+const solverModeBtn = document.getElementById("solverModeBtn");
+const solverDockPanel = document.getElementById("solverDockPanel");
+const sysSummaryPanel = document.getElementById("sysSummaryPanel");
+
+function setAppMode(mode, autoRun = true) {
+  appMode = mode;
+  sketchModeBtn.className = "mode-btn" + (mode === "sketch" ? " active-sketch" : "");
+  solverModeBtn.className = "mode-btn" + (mode === "solver" ? " active-solver" : "");
+  solverDockPanel.classList.toggle("visible", mode === "solver");
+  sysSummaryPanel.classList.toggle("visible", mode === "solver");
+  if (mode === "solver") {
+    syncSolverDockFromNode();
+    if (autoRun) runSimulation(true);
+    else updateSysSummaryPanel();
+  } else {
+    renderNodes(); renderWires(); renderInspector();
+  }
+}
+sketchModeBtn.onclick = () => setAppMode("sketch", false);
+solverModeBtn.onclick = () => setAppMode("solver", true);
+document.getElementById("svReRunBtn").onclick = () => runSimulation(true);
+
+// 1) 시스템 해석 요약 패널 독립 플로팅 분리 / 도킹
+let sysSummaryFloating = false, draggingSysSummary = false, sysFloatOff = { x: 0, y: 0 };
+document.getElementById("floatSysSummaryBtn").onclick = () => {
+  sysSummaryFloating = !sysSummaryFloating;
+  sysSummaryPanel.classList.toggle("floating", sysSummaryFloating);
+  document.getElementById("floatSysSummaryBtn").textContent = sysSummaryFloating ? "📌 고정 도킹" : "🗗 창 분리";
+  if (!sysSummaryFloating) { sysSummaryPanel.style.left = ""; sysSummaryPanel.style.top = ""; sysSummaryPanel.style.width = ""; }
+};
+document.getElementById("sysSummaryHandle").addEventListener("mousedown", e => {
+  if (!sysSummaryFloating || ["BUTTON","SELECT","INPUT"].includes(e.target.tagName)) return;
+  draggingSysSummary = true;
+  const r = sysSummaryPanel.getBoundingClientRect();
+  sysFloatOff = { x: e.clientX - r.left, y: e.clientY - r.top };
+});
+
+// 2) 솔버 전역 입구조건 패널 독립 플로팅 분리 / 도킹
+let solverFloating = false, draggingSolverDock = false, svFloatOff = { x: 0, y: 0 };
+document.getElementById("floatSolverBtn").onclick = () => {
+  solverFloating = !solverFloating;
+  solverDockPanel.classList.toggle("floating", solverFloating);
+  document.getElementById("floatSolverBtn").textContent = solverFloating ? "📌 고정 도킹" : "🗗 창 분리";
+  if (!solverFloating) { solverDockPanel.style.left = ""; solverDockPanel.style.top = ""; solverDockPanel.style.width = ""; }
+};
+document.getElementById("solverDockHandle").addEventListener("mousedown", e => {
+  if (!solverFloating || ["BUTTON","SELECT","INPUT"].includes(e.target.tagName)) return;
+  draggingSolverDock = true;
+  const r = solverDockPanel.getBoundingClientRect();
+  svFloatOff = { x: e.clientX - r.left, y: e.clientY - r.top };
+});
+
+const themeBtn = document.getElementById("themeToggleBtn");
+themeBtn.onclick = () => {
+  const isLight = document.body.classList.toggle("light-mode");
+  themeBtn.textContent = isLight ? "🌙 다크" : "☀️ 화이트";
+  renderNodes(); renderWires();
+};
+
+const workspaceEl = document.getElementById("workspaceEl");
+const toggleInspectorBtn = document.getElementById("toggleInspectorBtn");
+toggleInspectorBtn.onclick = () => {
+  const hidden = workspaceEl.classList.toggle("inspector-hidden");
+  toggleInspectorBtn.textContent = hidden ? "◧ 속성창 보기" : "◧ 속성창 숨기기";
+  setTimeout(drawPlot, 30);
+};
+document.querySelectorAll(".folder-hdr").forEach(hdr => {
+  hdr.onclick = () => {
+    const f = hdr.parentElement; f.classList.toggle("collapsed");
+    hdr.lastElementChild.textContent = f.classList.contains("collapsed") ? "▸" : "▾";
+  };
+});
+
+// ================= CoolProp 유체 DB =================
+const FLUID_STORE_KEY = "amesim_sim_fluids_v2_coolprop";
+let fluidRawDB = {}, fluidTableDB = {}, lastConvergence = null;
+function compileAllFluidTables() {
+  fluidTableDB = {};
+  Object.keys(fluidRawDB).forEach(k => { try { fluidTableDB[k] = new FP.FluidTable(k, fluidRawDB[k]); } catch {} });
+}
+function initFluidDB() {
+  try { const s = JSON.parse(localStorage.getItem(FLUID_STORE_KEY) || "null"); if (s && Object.keys(s).length > 0) fluidRawDB = s; } catch {}
+  const defaults = FP.getDefaultFluidDB();
+  Object.keys(defaults).forEach(k => { if (!fluidRawDB[k]) fluidRawDB[k] = defaults[k]; });
+  compileAllFluidTables();
+}
+function saveFluidDB() { try { localStorage.setItem(FLUID_STORE_KEY, JSON.stringify(fluidRawDB)); } catch {} }
+
+function getActiveFluidInfo() {
+  const comp = nodes.find(n => n.type === "compressor");
+  let refNode = comp && comp.params.fluidNodeId ? nodes.find(n => n.id === comp.params.fluidNodeId) : null;
+  if (!refNode) refNode = nodes.find(n => n.type === "refrigerant");
+  const fluidName = (refNode && refNode.params.fluid) || "R134a";
+  const refProp = fluidTableDB[fluidName] || fluidTableDB["R134a"] || new FP.FluidTable("R134a", FP.buildDefaultR134aRaw());
+  return { fluidName, refProp, refNode };
+}
+
+function getSimConfig() {
+  return {
+    comp_rpm: Math.max(500, +document.getElementById("cfgCompRpm").value || 3000),
+    T_amb_C: +document.getElementById("cfgTamb").value,
+    fan_rpm: Math.max(200, +document.getElementById("cfgFanRpm").value || 1800),
+    t_sec: Math.max(0, +document.getElementById("cfgTimeSec").value || 0),
+    sim_duration_s: Math.max(1, +document.getElementById("cfgSimDuration").value || 30),
+    sim_dt_s: Math.max(0.2, +document.getElementById("cfgSimDt").value || 1.0)
+  };
+}
+
+function syncSolverDockFromNode() {
+  const sv = nodes.find(n => n.type === "solver"); if (!sv) return;
+  document.getElementById("dockNumMethod").value = sv.params.num_method || "newton_secant";
+  document.getElementById("dockGovMass").checked = sv.params.gov_mass !== false;
+  document.getElementById("dockGovEnergy").checked = sv.params.gov_energy !== false;
+  document.getElementById("dockGovMom").checked = sv.params.gov_momentum !== false;
+}
+
+["cfgCompRpm","cfgTamb","cfgFanRpm","cfgTimeSec","cfgSimDuration","cfgSimDt"].forEach(id => {
+  document.getElementById(id).oninput = () => {
+    if (appMode === "solver") runSimulation(false);
+    if (originSeriesList.length > 0) recomputeAndDrawOriginPlot();
+  };
+});
+document.getElementById("dockNumMethod").onchange = e => { const sv = nodes.find(n => n.type === "solver"); if (sv) sv.params.num_method = e.target.value; runSimulation(true); };
+document.getElementById("dockGovMass").onchange = e => { const sv = nodes.find(n => n.type === "solver"); if (sv) sv.params.gov_mass = e.target.checked; runSimulation(true); };
+document.getElementById("dockGovEnergy").onchange = e => { const sv = nodes.find(n => n.type === "solver"); if (sv) sv.params.gov_energy = e.target.checked; runSimulation(true); };
+document.getElementById("dockGovMom").onchange = e => { const sv = nodes.find(n => n.type === "solver"); if (sv) sv.params.gov_momentum = e.target.checked; runSimulation(true); };
+
+function getSolverOpts() {
+  const sv = nodes.find(n => n.type === "solver");
+  const sp = sv ? sv.params : { loop_mode: "closed", gov_mass: true, gov_energy: true, gov_momentum: true, num_method: "newton_secant", maxIter: 50, tolT: 0.05, tolP: 0.02, alpha: 0.45 };
+  return {
+    loop_mode: sp.loop_mode || "closed",
+    gov_mass: sp.gov_mass !== false,
+    gov_energy: sp.gov_energy !== false,
+    gov_momentum: sp.gov_momentum !== false,
+    num_method: sp.num_method || "newton_secant",
+    maxIter: Math.max(5, sp.maxIter || 50),
+    tolT: Math.max(0.001, sp.tolT || 0.05),
+    tolP: Math.max(0.001, sp.tolP || 0.02),
+    alpha: Math.min(1.0, Math.max(0.1, sp.alpha || 0.45)),
+    simConfig: getSimConfig(),
+    fluidTableDB
+  };
+}
+
+// ================= 크롬 스타일 동적 탭 (신호 컴포넌트는 탭 생략!) =================
+let activeTabId = "canvas";
+const TYPE_COLORS = {
+  solver: "#0284c7", refrigerant: "#0891b2", compressor: "#ea580c",
+  hx_fin_plate: "#16a34a", hx_plate: "#0284c7", fan: "#0891b2", receiver: "#0ea5e9", valve: "#7c3aed",
+  sensor_sh: "#15803d", sensor_p: "#0284c7", sensor_t: "#ea580c"
+};
+
+function renderChromeTabs() {
+  const bar = document.getElementById("chromeTabBar");
+  let html = `<div class="c-tab ${activeTabId==='canvas'?'active':''}" data-tab="canvas"><span class="dot" style="background:#0284c7;"></span><span class="t-lbl">1. 통합 캔버스</span></div>`;
+  let tabNum = 2;
+  nodes.forEach((n) => {
+    if (SM.isSignalType(n.type)) return; // 신호 컴포넌트는 탭 바 복잡도 방지를 위해 탭 생략!
+    const col = TYPE_COLORS[n.type] || "#64748b";
+    const sub = n.type === "refrigerant" ? ` (${n.params.fluid})` : "";
+    html += `<div class="c-tab ${activeTabId===n.id?'active':''}" data-tab="${n.id}" title="${n.modelName}${sub}"><span class="dot" style="background:${col};"></span><span class="t-lbl">${tabNum++}. ${n.modelName}${sub}</span></div>`;
+  });
+  bar.innerHTML = html;
+  bar.querySelectorAll(".c-tab").forEach(el => { el.onclick = () => switchTab(el.dataset.tab); });
+}
+
+function switchTab(tabId) {
+  const targetNode = nodes.find(n => n.id === tabId);
+  if (tabId !== "canvas" && (!targetNode || SM.isSignalType(targetNode.type))) tabId = "canvas";
+  activeTabId = tabId;
+  document.getElementById("page-canvas").classList.toggle("active", tabId === "canvas");
+  document.getElementById("page-detail").classList.toggle("active", tabId !== "canvas");
+  renderChromeTabs();
+  if (tabId === "canvas") { renderNodes(); renderWires(); renderInspector(); setTimeout(drawPlot, 20); }
+  else renderActiveDetailTab();
+}
+
+function renderActiveDetailTab() {
+  if (activeTabId === "canvas") return;
+  const node = nodes.find(n => n.id === activeTabId);
+  if (!node) { switchTab("canvas"); return; }
+  CV.renderComponentDetailTab(document.getElementById("page-detail"), node, {
+    nodes, edges, fluidRawDB, fluidTableDB, lastConvergence, simConfig: getSimConfig(),
+    hxGeoFieldsHTML, hxMethodFieldsHTML, bindHxGeoAndMethodInputs, drawSolverChart,
+    onShowCorrHelp: openCorrHelp,
+    onParamChange: async (rerenderTab) => {
+      // 1) 슬라이더/지름/높이/개도율 변경 즉시 동기적으로 컷어웨이 SVG 업데이트 (60fps 무지연!)
+      const wrap = document.getElementById("dtCutawayWrap");
+      if (wrap) wrap.innerHTML = CV.buildCutawayByNode(node, getSimConfig());
+      renderChromeTabs();
+      if (node.type === "solver") syncSolverDockFromNode();
+      // 2) 시뮬레이션 재계산 후 결과 반영
+      await runSimulation(false);
+      if (rerenderTab) renderActiveDetailTab();
+      else updateDetailLiveVisuals(node);
+    },
+    onFluidAction: (action, nd, fluidKey) => {
+      if (action === "refreshTab") renderActiveDetailTab();
+      else if (action === "resetCoolprop") { fluidRawDB = FP.getDefaultFluidDB(); saveFluidDB(); compileAllFluidTables(); runSimulation(true).then(() => renderActiveDetailTab()); }
+      else if (action === "applyCsv") {
+        try {
+          fluidTableDB[fluidKey] = new FP.FluidTable(fluidKey, fluidRawDB[fluidKey]); saveFluidDB();
+          const st = document.getElementById("dtPropStatus"); if (st) { st.style.color = "var(--green)"; st.textContent = `'${fluidKey}' 파싱 완료!`; }
+          runSimulation(true);
+        } catch (err) { const st = document.getElementById("dtPropStatus"); if (st) { st.style.color = "var(--danger)"; st.textContent = "오류: " + err.message; } }
+      }
+    },
+    onSolverAction: (act) => {
+      if (act === "run") { setAppMode("solver", false); runSimulation(true).then(() => renderActiveDetailTab()); }
+      else if (act === "optimize") {
+        const { fluidName, refProp } = getActiveFluidInfo();
+        const { best } = SM.optimizeAlpha(nodes, edges, fluidName, refProp, getSolverOpts());
+        if (best) { node.params.alpha = Number(best.alpha.toFixed(2)); runSimulation(true).then(() => renderActiveDetailTab()); }
+      }
+    },
+    onPointLookupInit: (fluidKey) => initDetailPointLookup(fluidKey)
+  });
+}
+
+function updateDetailLiveVisuals(node) {
+  if (activeTabId !== node.id) return;
+  const wrap = document.querySelector("#page-detail #dtCutawayWrap");
+  if (wrap) wrap.innerHTML = CV.buildCutawayByNode(node, getSimConfig());
+  const oldKpi = document.querySelector("#page-detail .kpi-grid");
+  if (oldKpi) {
+    const newKpiHtml = CV.buildKpiByNode(node);
+    if (newKpiHtml) oldKpi.innerHTML = newKpiHtml;
+  }
+}
+
+function initDetailPointLookup(fluidKey) {
+  const modeSel = document.getElementById("ptMode"); if (!modeSel) return;
+  const tbl = fluidTableDB[fluidKey], isSingle = !tbl || tbl.kind === "single_phase";
+  const sync = (resetVals) => {
+    [...modeSel.options].forEach(o => { o.disabled = isSingle && ["PS","PX","TSAT"].includes(o.value); });
+    if (isSingle && ["PS","PX","TSAT"].includes(modeSel.value)) modeSel.value = "PT";
+    const m = modeSel.value, l1 = document.getElementById("ptLbl1"), l2 = document.getElementById("ptLbl2"), i1 = document.getElementById("ptIn1"), i2 = document.getElementById("ptIn2");
+    document.getElementById("ptBox2").style.display = m === "TSAT" ? "none" : "inline-flex";
+    if (m === "PT") { l1.textContent = "압력 P [bar]"; l2.textContent = "온도 T [°C]"; if (resetVals) { i1.value = fluidKey === "Air" ? 1.013 : (fluidKey === "R32" ? 16 : 10); i2.value = ["Air","GW","Water"].includes(fluidKey) ? 25 : 45; } }
+    else if (m === "PH") { l1.textContent = "압력 P [bar]"; l2.textContent = "엔탈피 h [kJ/kg]"; if (resetVals && tbl?.sat) { const mp = tbl.sat.P[Math.floor(tbl.sat.P.length/2)]; i1.value = mp.toFixed(1); i2.value = tbl.getSatAtP(mp).h_g.toFixed(1); } }
+    else if (m === "PS") { l1.textContent = "압력 P [bar]"; l2.textContent = "엔트로피 s"; if (resetVals && tbl?.sat) { const mp = tbl.sat.P[Math.floor(tbl.sat.P.length/2)]; i1.value = mp.toFixed(1); i2.value = tbl.getSatAtP(mp).s_g.toFixed(4); } }
+    else if (m === "PX") { l1.textContent = "압력 P [bar]"; l2.textContent = "건도 x [0~1]"; if (resetVals) i2.value = 0.5; }
+    else if (m === "TSAT") { l1.textContent = "포화온도 T_sat [°C]"; if (resetVals) i1.value = fluidKey === "Water" ? 100 : 25; }
+    calc();
+  };
+  const calc = () => {
+    const out = document.getElementById("ptResult"), badge = document.getElementById("ptFluidBadge"); if (!tbl || !out) return;
+    badge.textContent = tbl.kind === "two_phase" ? `${fluidKey} (P: ${tbl.sat.P[0]}~${tbl.sat.P[tbl.sat.P.length-1]} bar)` : `${fluidKey} (T: ${tbl.single.T[0]}~${tbl.single.T[tbl.single.T.length-1]}°C)`;
+    const m = modeSel.value, v1 = +document.getElementById("ptIn1").value, v2 = +document.getElementById("ptIn2").value;
+    try {
+      if (m === "TSAT" && tbl.kind === "two_phase") {
+        const pSat = tbl.pSatBar(v1), s = tbl.getSatAtP(pSat);
+        out.innerHTML = `<div style="margin-top:8px;font-size:12px;color:var(--accent);font-weight:700;">P_sat = ${pSat.toFixed(4)} bar | h_fg = ${(s.h_g - s.h_f).toFixed(2)} kJ/kg</div><table class="pt-table"><thead><tr><th>물성치</th><th>포화액 (x=0)</th><th>포화증기 (x=1)</th></tr></thead><tbody><tr><td>h [kJ/kg]</td><td>${s.h_f.toFixed(3)}</td><td>${s.h_g.toFixed(3)}</td></tr><tr><td>s [kJ/kg-K]</td><td>${s.s_f.toFixed(4)}</td><td>${s.s_g.toFixed(4)}</td></tr><tr><td>ρ [kg/m³]</td><td>${s.rho_f.toFixed(3)}</td><td>${s.rho_g.toFixed(4)}</td></tr><tr><td>μ [uPa-s]</td><td>${s.mu_f.toFixed(2)}</td><td>${s.mu_g.toFixed(2)}</td></tr><tr><td>k [mW/m-K]</td><td>${s.k_f.toFixed(2)}</td><td>${s.k_g.toFixed(2)}</td></tr><tr><td>Cp [kJ/kg-K]</td><td>${s.Cp_f.toFixed(4)}</td><td>${s.Cp_g.toFixed(4)}</td></tr></tbody></table>`;
+        return;
+      }
+      let st;
+      if (m === "PT") st = tbl.kind === "single_phase" ? { ...tbl.evalSinglePhase(v2, v1), phase: "단상", x: 1, SC: 0, SH: 0, T_sat: null } : tbl.solvePT(v1, v2);
+      else if (m === "PH") st = tbl.evalPH(v1, v2);
+      else if (m === "PS") st = tbl.solvePS(v1, v2);
+      else { const sat = tbl.getSatAtP(v1); st = tbl.evalPH(v1, sat.h_f + Math.min(1, Math.max(0, v2)) * (sat.h_g - sat.h_f)); }
+      const Pr = (st.Cp * 1000 * st.mu * 1e-6) / Math.max(1e-6, st.k * 1e-3);
+      let ph = st.phase; if (st.SC > 0.01) ph += ` (SC ${st.SC.toFixed(1)}K)`; else if (st.SH > 0.01) ph += ` (SH ${st.SH.toFixed(1)}K)`; else if (ph === "포화 (2상)") ph += ` (x=${st.x.toFixed(3)})`;
+      out.innerHTML = `<div class="pt-grid">${[["상", ph, "var(--accent)"], ["P [bar]", st.P.toFixed(4), "var(--text)"], ["T [°C]", st.T.toFixed(3), "var(--hot)"], ["h [kJ/kg]", st.h.toFixed(3), "var(--text)"], ["s [kJ/kgK]", st.s.toFixed(4), "var(--text)"], ["ρ [kg/m³]", st.rho.toFixed(4), "var(--green)"], ["μ [uPa-s]", st.mu.toFixed(2), "var(--text)"], ["k [mW/mK]", st.k.toFixed(2), "var(--text)"], ["Cp [kJ/kgK]", st.Cp.toFixed(4), "var(--text)"], ["Pr [-]", Pr.toFixed(3), "var(--purple)"]].map(([l,v,c]) => `<div class="pt-cell"><div class="lbl">${l}</div><div class="val" style="color:${c}">${v}</div></div>`).join("")}</div>`;
+    } catch (e) { out.innerHTML = `<div style="color:var(--danger);font-size:12px;margin-top:6px;">${e.message}</div>`; }
+  };
+  modeSel.onchange = () => sync(true); document.getElementById("ptIn1").oninput = calc; document.getElementById("ptIn2").oninput = calc; document.getElementById("ptCalcBtn").onclick = calc; sync(true);
+}
+
+// ================= 캔버스 Ctrl+휠 확대/축소 & 팬 =================
+let viewZoom = 1.0, viewPanX = 0, viewPanY = 0;
+const canvasWrap = document.getElementById("canvasWrap"), canvasStage = document.getElementById("canvasStage");
+const zoomPill = document.getElementById("zoomPill");
+
+function applyCanvasTransform() {
+  canvasStage.style.transform = `translate(${viewPanX.toFixed(1)}px, ${viewPanY.toFixed(1)}px) scale(${viewZoom.toFixed(3)})`;
+  zoomPill.textContent = `🔍 ${Math.round(viewZoom * 100)}%`;
+}
+function clientToCanvas(clientX, clientY) {
+  const r = canvasWrap.getBoundingClientRect();
+  return { x: (clientX - r.left - viewPanX) / viewZoom, y: (clientY - r.top - viewPanY) / viewZoom };
+}
+canvasWrap.addEventListener("wheel", e => {
+  if (!e.ctrlKey) return;
+  e.preventDefault();
+  const r = canvasWrap.getBoundingClientRect();
+  const sx = e.clientX - r.left, sy = e.clientY - r.top;
+  const oldZ = viewZoom;
+  const factor = e.deltaY < 0 ? 1.12 : 0.89;
+  viewZoom = Math.min(2.4, Math.max(0.4, viewZoom * factor));
+  viewPanX = sx - (sx - viewPanX) * (viewZoom / oldZ);
+  viewPanY = sy - (sy - viewPanY) * (viewZoom / oldZ);
+  applyCanvasTransform();
+}, { passive: false });
+zoomPill.onclick = () => { viewZoom = 1.0; viewPanX = 0; viewPanY = 0; applyCanvasTransform(); };
+
+// ================= 선도 도킹 위치 & 플로팅 =================
+const centerCol = document.getElementById("centerCol"), plotterPanel = document.getElementById("plotterPanel"), plotterResizer = document.getElementById("plotterResizer"), floatPlotBtn = document.getElementById("floatPlotBtn");
+let plotDockMode = "bottom", resizingPlot = false, draggingFloatPlot = false, floatOff = { x: 0, y: 0 };
+function setPlotDock(mode) {
+  plotDockMode = mode; centerCol.classList.toggle("dock-right", mode === "right"); plotterPanel.classList.toggle("floating", mode === "float");
+  plotterResizer.style.display = mode === "float" ? "none" : "flex"; floatPlotBtn.textContent = mode === "float" ? "📌 다시 붙이기" : "🗗 창 분리";
+  if (mode !== "float") { plotterPanel.style.left = ""; plotterPanel.style.top = ""; if (mode === "bottom") { plotterPanel.style.width = ""; plotterPanel.style.height = "255px"; } else { plotterPanel.style.height = ""; plotterPanel.style.width = "42%"; } }
+  setTimeout(drawPlot, 30);
+}
+document.getElementById("dockBottomBtn").onclick = () => setPlotDock("bottom");
+document.getElementById("dockRightBtn").onclick = () => setPlotDock("right");
+floatPlotBtn.onclick = () => setPlotDock(plotDockMode === "float" ? "bottom" : "float");
+plotterResizer.addEventListener("mousedown", e => { e.preventDefault(); resizingPlot = true; });
+document.getElementById("plotterDragHandle").addEventListener("mousedown", e => {
+  if (plotDockMode !== "float" || ["SELECT","INPUT","BUTTON","LABEL"].includes(e.target.tagName)) return;
+  draggingFloatPlot = true; const r = plotterPanel.getBoundingClientRect(); floatOff = { x: e.clientX - r.left, y: e.clientY - r.top };
+});
+window.addEventListener("mousemove", e => {
+  if (resizingPlot) {
+    if (plotDockMode === "bottom") plotterPanel.style.height = Math.max(150, Math.min(window.innerHeight - 210, window.innerHeight - e.clientY)) + "px";
+    else if (plotDockMode === "right") { const cr = centerCol.getBoundingClientRect(); plotterPanel.style.width = Math.max(260, Math.min(cr.width - 260, cr.right - e.clientX)) + "px"; }
+    drawPlot();
+  }
+  if (draggingFloatPlot) { plotterPanel.style.left = Math.max(10, e.clientX - floatOff.x) + "px"; plotterPanel.style.top = Math.max(40, e.clientY - floatOff.y) + "px"; }
+  if (draggingSolverDock) { solverDockPanel.style.left = Math.max(10, e.clientX - svFloatOff.x) + "px"; solverDockPanel.style.top = Math.max(40, e.clientY - svFloatOff.y) + "px"; }
+  if (draggingSysSummary) { sysSummaryPanel.style.left = Math.max(10, e.clientX - sysFloatOff.x) + "px"; sysSummaryPanel.style.top = Math.max(40, e.clientY - sysFloatOff.y) + "px"; }
+  if (draggingOriginWin) { originPlotWin.style.left = Math.max(10, e.clientX - originWinOff.x) + "px"; originPlotWin.style.top = Math.max(40, e.clientY - originWinOff.y) + "px"; }
+});
+window.addEventListener("mouseup", () => { resizingPlot = false; draggingFloatPlot = false; draggingSolverDock = false; draggingSysSummary = false; draggingOriginWin = false; });
+new ResizeObserver(() => { if (plotDockMode === "float") drawPlot(); }).observe(plotterPanel);
+
+// ================= 노드, 배관, 센서 신호선 =================
+let nodes = [], edges = [], nextId = 1, selectedNodeIds = new Set(), lastExportRows = [], mismatchEdgeIds = new Set();
+const wireSvg = document.getElementById("wireSvg"), nodeLayer = document.getElementById("nodeLayer"), labelLayer = document.getElementById("labelLayer"), selectBox = document.getElementById("selectBox"), inspector = document.getElementById("inspector");
+
+function defaultHxParams(hxType) {
+  return {
+    hxType, method: "GEO",
+    fin_type: "louver", louver_pitch_mm: 1.2, louver_angle_deg: 27, fin_Cj: 0.267,
+    ref_cond_corr: "shah_cond", ref_evap_corr: "yan_lin", sec_phe_corr: "muley_manglik",
+    ref_corr_C: 1.0, sec_corr_C: 1.0,
+    sec_fluid: hxType === "plate" ? "GW" : "Air", sec_mode: "fluid_temp",
+    T_sec_in: hxType === "plate" ? 18.0 : 35.0, m_sec_kgs: hxType === "plate" ? 0.35 : 1.2, m_sec_ref: hxType === "plate" ? 0.35 : 1.2,
+    fan_rpm_ref: 1800, P_sec_bar: hxType === "plate" ? 2.0 : 1.013, Q_source_kW: -6.0,
+    link_ambient: hxType === "fin_plate", link_fan: hxType === "fin_plate", auto_dP: true, dP_bar: 0.2,
+    core_W_mm: 520, core_H_mm: 360, core_D_mm: 26, fin_pitch_mm: 2.0, fin_thick_mm: 0.12, ch_Dh_mm: 2.5, n_channels: 32, n_passes: 2,
+    plate_W_mm: 120, plate_L_mm: 320, chevron_deg: 60, corr_depth_mm: 2.0, corr_pitch_mm: 7.0, phi_enlarge: 1.17, n_plates: 30, plate_thick_mm: 0.4, plate_k_WmK: 16,
+    UA_kWK: 1.2, NTU_val: 1.2, area_m2: 12.0, Dh_mm: 6.0, h_air_Wm2K: 80, corr_C: 0.023, corr_m: 0.8, corr_n: 0.4
+  };
+}
+function getDefaultRefNodeId() { const r = nodes.find(x => x.type === "refrigerant"); return r ? r.id : ""; }
+function isCompactNode(type) { return type === "solver" || type === "refrigerant" || SM.isSensorType(type) || SM.isSignalType(type); }
+
+function createNodeData(addType, x, y, rot = 0) {
+  const id = "n" + (nextId++);
+  const type = addType === "accumulator" ? "receiver" : addType;
+  const cnt = nodes.filter(n => n.type === type).length + 1;
+  const fId = getDefaultRefNodeId();
+
+  if (type === "solver") return { id, type, x, y, rot: 0, modelName: `솔버 #${cnt}`, params: { loop_mode: "closed", gov_mass: true, gov_energy: true, gov_momentum: true, num_method: "newton_secant", maxIter: 50, tolT: 0.05, tolP: 0.02, alpha: 0.45 }, result: null };
+  if (type === "refrigerant") return { id, type, x, y, rot: 0, modelName: `냉매 #${cnt}`, params: { fluid: "R134a", editFluid: "R134a", charge_mode: "auto", charge_g: 650, auto_rec_level_pct: 40, subKey: "h", supKey: "h" }, result: null };
+  if (type === "compressor") return { id, type, x, y, rot, modelName: `압축기 #${cnt}`, params: { fluidNodeId: fId, sigNodeId: "", P1_bar: 3.5, P2_bar: 12.5, T1_C: 15.0, rpm: 3000, vd_cc: 120, link_global: true, csv_is: CM.DEFAULT_EFF_CSV.is, csv_vol: CM.DEFAULT_EFF_CSV.vol, csv_mech: CM.DEFAULT_EFF_CSV.mech }, result: null };
+  if (type === "hx_fin_plate") return { id, type, x, y, rot, modelName: `핀-플레이트 HX #${cnt}`, params: { ...defaultHxParams("fin_plate"), fluidNodeId: fId, sigNodeId: "", fanNodeId: "" }, result: null };
+  if (type === "hx_plate") return { id, type, x, y, rot, modelName: `판형 HX #${cnt}`, params: { ...defaultHxParams("plate"), fluidNodeId: fId, sigNodeId: "" }, result: null };
+  if (type === "fan") {
+    const firstFp = nodes.find(n => n.type === "hx_fin_plate");
+    return { id, type, x, y, rot: 0, modelName: `팬 #${cnt}`, params: { targetHxId: firstFp ? firstFp.id : "", sigNodeId: "", rpm: 1800, rpm_ref: 1800, link_global: true, K_sys: 0.14, curve_csv: FM.DEFAULT_FAN_CSV }, result: null };
+  }
+  if (type === "receiver") {
+    const isAcc = addType === "accumulator";
+    return { id, type, x, y, rot, modelName: isAcc ? `어큐뮬레이터 #${cnt}` : `액 리시버 #${cnt}`, params: { fluidNodeId: fId, rec_type: isAcc ? "suction" : "high_pressure", diam_mm: 90, height_mm: 200, dP_bar: 0.03, Q_loss_kW: 0.0 }, result: null };
+  }
+  if (SM.isSensorType(type)) {
+    const nm = type === "sensor_sh" ? `과열도 센서 #${cnt}` : (type === "sensor_p" ? `압력 센서 #${cnt}` : `온도 센서 #${cnt}`);
+    return { id, type, x, y, rot: 0, modelName: nm, params: { measureEdgeId: "", measureNodeId: "" }, result: null };
+  }
+  if (SM.isSignalType(type)) {
+    if (type === "sig_const") return { id, type, x, y, rot: 0, modelName: `상수 신호 #${cnt}`, params: { value: -5.5 }, result: null };
+    if (type === "sig_step") return { id, type, x, y, rot: 0, modelName: `계단함수 #${cnt}`, params: { val_init: 2400, val_final: 3600, t_step: 10 }, result: null };
+    return { id, type, x, y, rot: 0, modelName: `시나리오 #${cnt}`, params: { scenario_csv: "0, 2200\n10, 3200\n20, 4200\n30, 2800" }, result: null };
+  }
+  return { id, type: "valve", x, y, rot, modelName: `팽창밸브 #${cnt}`, params: { fluidNodeId: fId, valve_mode: "txv_sh", flow_corr: "re_diam_cd", sensorNodeId: "", orifice_D_mm: 2.8, opening_pct: 50, open_base_pct: 50, SH_target_K: 6.0, Kp_sh: 3.5, P_out_bar: 3.6, Cd: 0.65 }, result: null };
+}
+
+function getPortLocal(rot, isOut, portKind = "flow") {
+  const r = ((rot || 0) % 360 + 360) % 360;
+  // 공기측 포트(air): 냉매 유로에 수직인 상단(입구) / 하단(출구)에 배치
+  if (portKind === "air") {
+    if (r === 0) return isOut ? { x: 50, y: 100, dx: 0, dy: 1 } : { x: 50, y: 0, dx: 0, dy: -1 };
+    if (r === 90) return isOut ? { x: 0, y: 50, dx: -1, dy: 0 } : { x: 100, y: 50, dx: 1, dy: 0 };
+    if (r === 180) return isOut ? { x: 50, y: 0, dx: 0, dy: -1 } : { x: 50, y: 100, dx: 0, dy: 1 };
+    return isOut ? { x: 100, y: 50, dx: 1, dy: 0 } : { x: 0, y: 50, dx: -1, dy: 0 };
+  }
+  if (portKind === "sig_out") return { x: 64, y: 32, dx: 1, dy: 0 };
+  if (portKind === "sig_in") return { x: 50, y: 6, dx: 0, dy: -1 };
+  if (r === 0) return isOut ? { x: 100, y: 50, dx: 1, dy: 0 } : { x: 0, y: 50, dx: -1, dy: 0 };
+  if (r === 90) return isOut ? { x: 50, y: 100, dx: 0, dy: 1 } : { x: 50, y: 0, dx: 0, dy: -1 };
+  if (r === 180) return isOut ? { x: 0, y: 50, dx: -1, dy: 0 } : { x: 100, y: 50, dx: 1, dy: 0 };
+  return isOut ? { x: 50, y: 0, dx: 0, dy: -1 } : { x: 50, y: 100, dx: 0, dy: 1 };
+}
+
+function getSymbolSVG(n) {
+  const fillCol = document.body.classList.contains("light-mode") ? "#ffffff" : "#1e293b";
+  if (n.type === "solver") return `<svg width="64" height="64" viewBox="0 0 64 64"><rect x="6" y="10" width="52" height="44" rx="9" fill="${fillCol}" stroke="#0284c7" stroke-width="2.4"/><circle cx="32" cy="29" r="10" fill="none" stroke="#0284c7" stroke-width="2.2" stroke-dasharray="5 3"/><circle cx="32" cy="29" r="3.5" fill="#0284c7"/><text x="32" y="49" text-anchor="middle" font-size="7.5" font-weight="800" fill="#0284c7">SOLVER</text></svg>`;
+  if (n.type === "refrigerant") return `<svg width="64" height="64" viewBox="0 0 64 64"><polygon points="32,5 58,32 32,59 6,32" fill="${fillCol}" stroke="#0891b2" stroke-width="2.4"/><text x="32" y="31" text-anchor="middle" font-size="9.5" font-weight="800" fill="#0891b2">${n.params.fluid || "R134a"}</text><text x="32" y="42" text-anchor="middle" font-size="7.5" fill="#64748b">${n.params.charge_mode==="auto"?"AUTO":"MAN"}</text></svg>`;
+  if (SM.isSensorType(n.type)) {
+    const c = n.type === "sensor_sh" ? "#16a34a" : (n.type === "sensor_p" ? "#0284c7" : "#ea580c");
+    const t = n.type === "sensor_sh" ? "P+T" : (n.type === "sensor_p" ? "P" : "T");
+    return `<svg width="64" height="64" viewBox="0 0 64 64"><circle cx="32" cy="32" r="24" fill="${fillCol}" stroke="${c}" stroke-width="2.6"/><circle cx="32" cy="32" r="18" fill="${c}18"/><text x="32" y="36" text-anchor="middle" font-size="12" font-weight="800" fill="${c}">${t}</text></svg>`;
+  }
+  if (SM.isSignalType(n.type)) {
+    const val = SM.evalSignalNode(n, getSimConfig().t_sec);
+    const c = n.type === "sig_const" ? "#d97706" : (n.type === "sig_step" ? "#7c3aed" : "#0284c7");
+    const icon = n.type === "sig_const"
+      ? `<line x1="15" y1="24" x2="49" y2="24" stroke="${c}" stroke-width="2.6"/>`
+      : (n.type === "sig_step"
+        ? `<polyline points="14,30 32,30 32,16 50,16" fill="none" stroke="${c}" stroke-width="2.4"/>`
+        : `<polyline points="14,29 24,17 37,26 50,15" fill="none" stroke="${c}" stroke-width="2.4"/>`);
+    return `<svg width="64" height="64" viewBox="0 0 64 64"><rect x="6" y="8" width="52" height="48" rx="9" fill="${fillCol}" stroke="${c}" stroke-width="2.4"/>${icon}<text x="32" y="47" text-anchor="middle" font-size="9.5" font-weight="800" fill="${c}">${Number(val.toFixed(2))}</text></svg>`;
+  }
+  if (n.type === "fan") {
+    const rpmShow = (n.params.link_global !== false) ? getSimConfig().fan_rpm : (n.params.rpm || 1800);
+    const dur = Math.max(0.35, 3600 / Math.max(rpmShow, 200)).toFixed(2);
+    return `<svg width="100" height="100" viewBox="0 0 100 100"><circle cx="50" cy="50" r="34" fill="${fillCol}" stroke="#0891b2" stroke-width="2.6"/><circle cx="50" cy="50" r="28" fill="#06b6d412" stroke="#0891b2" stroke-width="1.2" stroke-dasharray="4 3"/><g class="spin-impeller" style="animation-duration:${dur}s"><path d="M 50 50 C 40 26, 62 22, 54 44 Z" fill="#06b6d4" stroke="#0e7490" stroke-width="1.2"/><path d="M 50 50 C 74 40, 78 62, 56 54 Z" fill="#06b6d4" stroke="#0e7490" stroke-width="1.2"/><path d="M 50 50 C 60 74, 38 78, 46 56 Z" fill="#06b6d4" stroke="#0e7490" stroke-width="1.2"/><path d="M 50 50 C 26 60, 22 38, 44 46 Z" fill="#06b6d4" stroke="#0e7490" stroke-width="1.2"/><circle cx="50" cy="50" r="7" fill="#0e7490"/></g></svg>`;
+  }
+  if (n.type === "compressor") {
+    const rpmShow = (n.params.link_global !== false) ? getSimConfig().comp_rpm : (n.params.rpm || 3000);
+    const dur = Math.max(0.35, 6000 / Math.max(rpmShow, 300)).toFixed(2);
+    return `<svg width="100" height="100" viewBox="0 0 100 100"><line x1="0" y1="50" x2="14" y2="50" stroke="#0284c7" stroke-width="6"/><line x1="86" y1="50" x2="100" y2="50" stroke="#f97316" stroke-width="6"/><polygon points="14,18 86,30 86,70 14,82" fill="${fillCol}" stroke="#f97316" stroke-width="2.5"/><g class="spin-impeller" style="animation-duration:${dur}s"><circle cx="50" cy="50" r="13" fill="none" stroke="#f97316" stroke-width="1.8"/><line x1="50" y1="37" x2="50" y2="63" stroke="#fb923c" stroke-width="2.5"/><line x1="37" y1="50" x2="63" y2="50" stroke="#fb923c" stroke-width="2.5"/></g></svg>`;
+  }
+  if (n.type === "hx_plate") {
+    const isCond = !n.result || n.result.metrics.isCondenser, sc = isCond ? "#16a34a" : "#0284c7", cc = isCond ? "#0284c7" : "#38bdf8";
+    return `<svg width="100" height="100" viewBox="0 0 100 100"><line x1="0" y1="50" x2="16" y2="50" stroke="${isCond?'#f97316':'#0284c7'}" stroke-width="6"/><line x1="84" y1="50" x2="100" y2="50" stroke="${sc}" stroke-width="6"/><rect x="16" y="20" width="68" height="60" rx="5" fill="${fillCol}" stroke="${sc}" stroke-width="2.5"/><line x1="28" y1="22" x2="28" y2="78" stroke="${cc}" stroke-width="1.8"/><line x1="40" y1="22" x2="40" y2="78" stroke="${sc}" stroke-width="1.8"/><line x1="52" y1="22" x2="52" y2="78" stroke="${cc}" stroke-width="1.8"/><line x1="64" y1="22" x2="64" y2="78" stroke="${sc}" stroke-width="1.8"/><line x1="76" y1="22" x2="76" y2="78" stroke="${cc}" stroke-width="1.8"/></svg>`;
+  }
+  if (n.type === "hx_fin_plate" || n.type === "hx") {
+    const isCond = !n.result || n.result.metrics.isCondenser, sc = isCond ? "#16a34a" : "#0284c7", cc = isCond ? "#0284c7" : "#38bdf8";
+    return `<svg width="100" height="100" viewBox="0 0 100 100"><line x1="0" y1="50" x2="14" y2="50" stroke="${isCond?'#f97316':'#0284c7'}" stroke-width="6"/><line x1="86" y1="50" x2="100" y2="50" stroke="${sc}" stroke-width="6"/><rect x="14" y="24" width="72" height="52" rx="7" fill="${fillCol}" stroke="${sc}" stroke-width="2.5"/><polyline points="21,38 31,62 42,38 53,62 64,38 75,62 80,50" fill="none" stroke="${cc}" stroke-width="2.5" stroke-linejoin="round"/></svg>`;
+  }
+  if (n.type === "receiver") {
+    const lv = n.result ? Math.min(100, Math.max(0, n.result.metrics.level_pct)) : 35;
+    const hFill = Math.round(52 * (lv / 100)), yFill = 76 - hFill;
+    const isSuc = (n.params.rec_type || "suction") === "suction";
+    const strokeCol = isSuc ? "#0284c7" : "#16a34a";
+    return `<svg width="100" height="100" viewBox="0 0 100 100"><line x1="0" y1="50" x2="26" y2="50" stroke="${strokeCol}" stroke-width="6"/><line x1="74" y1="50" x2="100" y2="50" stroke="${strokeCol}" stroke-width="6"/><rect x="26" y="18" width="48" height="64" rx="16" fill="${fillCol}" stroke="${strokeCol}" stroke-width="2.5"/><rect x="28" y="${yFill}" width="44" height="${Math.max(0, hFill)}" rx="10" fill="${strokeCol}44"/>${isSuc ? `<path d="M 60 50 L 60 68 Q 50 74 40 68 L 40 34" fill="none" stroke="${strokeCol}" stroke-width="2.2"/>` : `<line x1="62" y1="50" x2="62" y2="72" stroke="${strokeCol}" stroke-width="2.2"/>`}</svg>`;
+  }
+  return `<svg width="100" height="100" viewBox="0 0 100 100"><line x1="0" y1="50" x2="22" y2="50" stroke="#16a34a" stroke-width="6"/><line x1="78" y1="50" x2="100" y2="50" stroke="#0284c7" stroke-width="6"/><polygon points="22,28 50,50 22,72" fill="${fillCol}" stroke="#7c3aed" stroke-width="2.5"/><polygon points="78,28 50,50 78,72" fill="${fillCol}" stroke="#7c3aed" stroke-width="2.5"/><line x1="50" y1="50" x2="50" y2="22" stroke="#7c3aed" stroke-width="2.5"/><rect x="36" y="16" width="28" height="8" rx="3" fill="#7c3aed"/></svg>`;
+}
+
+function buildOrthoPipe(p1, p2) {
+  const stub = 22;
+  const s1 = { x: p1.x + p1.dx * stub, y: p1.y + p1.dy * stub }, s2 = { x: p2.x + p2.dx * stub, y: p2.y + p2.dy * stub };
+  const pts = [{ x: p1.x, y: p1.y }, s1];
+  if (p1.dx !== 0 && p2.dx !== 0) { const mx = (s1.x + s2.x) / 2; pts.push({ x: mx, y: s1.y }, { x: mx, y: s2.y }); }
+  else if (p1.dy !== 0 && p2.dy !== 0) { const my = (s1.y + s2.y) / 2; pts.push({ x: s1.x, y: my }, { x: s2.x, y: my }); }
+  else if (p1.dx !== 0) pts.push({ x: s2.x, y: s1.y });
+  else pts.push({ x: s1.x, y: s2.y });
+  pts.push(s2, { x: p2.x, y: p2.y });
+
+  const clean = [pts[0]];
+  for (let i = 1; i < pts.length; i++) if (Math.hypot(pts[i].x - clean[clean.length - 1].x, pts[i].y - clean[clean.length - 1].y) > 1) clean.push(pts[i]);
+  const r = 10;
+  let d = `M ${clean[0].x} ${clean[0].y}`;
+  for (let i = 1; i < clean.length - 1; i++) {
+    const A = clean[i - 1], B = clean[i], C = clean[i + 1];
+    const d1 = Math.hypot(B.x - A.x, B.y - A.y), d2 = Math.hypot(C.x - B.x, C.y - B.y);
+    const cr = Math.min(r, d1 / 2, d2 / 2);
+    d += ` L ${B.x - ((B.x - A.x) / d1) * cr} ${B.y - ((B.y - A.y) / d1) * cr} Q ${B.x} ${B.y} ${B.x + ((C.x - B.x) / d2) * cr} ${B.y + ((C.y - B.y) / d2) * cr}`;
+  }
+  const last = clean[clean.length - 1]; d += ` L ${last.x} ${last.y}`;
+  const midIdx = Math.floor((clean.length - 1) / 2);
+  return { d, labelPos: { x: (clean[midIdx].x + clean[midIdx + 1].x) / 2, y: (clean[midIdx].y + clean[midIdx + 1].y) / 2 } };
+}
+
+function renderWires() {
+  wireSvg.innerHTML = ""; labelLayer.innerHTML = "";
+  const edgeCenters = new Map();
+
+  // 1) 냉매 유동 배관 (flow)
+  edges.filter(e => !e.kind || e.kind === "flow").forEach(edge => {
+    const p1 = getPortGlobal(edge.from, true, "flow"), p2 = getPortGlobal(edge.to, false, "flow");
+    const { d, labelPos } = buildOrthoPipe(p1, p2);
+    edgeCenters.set(edge.id, labelPos);
+    const isMismatch = mismatchEdgeIds.has(edge.id);
+    const showRes = appMode === "solver" && edge.stream;
+    const col = isMismatch ? "#dc2626" : (showRes ? CV.tempToCFDColor(edge.stream.T_C) : "#64748b");
+    const flowDur = showRes ? Math.max(0.4, 1.5 - Math.min(1.0, edge.stream.m_dot * 8)).toFixed(2) : "1.4";
+
+    const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    g.setAttribute("class", "pipe-group" + (isMismatch ? " pipe-mismatch" : "") + (selectedEdgeId === edge.id ? " selected" : ""));
+    g.onclick = e => {
+      e.stopPropagation();
+      selectedNodeIds.clear(); selectedEdgeId = edge.id;
+      document.querySelectorAll(".node").forEach(nd => nd.classList.remove("selected"));
+      renderWires(); renderInspector();
+    };
+
+    const pCasing = document.createElementNS("http://www.w3.org/2000/svg", "path"); pCasing.setAttribute("d", d); pCasing.setAttribute("class", "pipe-casing");
+    const pCore = document.createElementNS("http://www.w3.org/2000/svg", "path"); pCore.setAttribute("d", d); pCore.setAttribute("class", "pipe-core"); pCore.setAttribute("stroke", col);
+    const pFlow = document.createElementNS("http://www.w3.org/2000/svg", "path"); pFlow.setAttribute("d", d); pFlow.setAttribute("class", "pipe-flow"); pFlow.style.animationDuration = flowDur + "s";
+    g.append(pCasing, pCore, pFlow); wireSvg.appendChild(g);
+
+    if (isMismatch) {
+      const lbl = document.createElement("div"); lbl.className = "pipe-label";
+      lbl.style.left = labelPos.x + "px"; lbl.style.top = labelPos.y + "px"; lbl.style.borderColor = "#dc2626"; lbl.style.color = "#dc2626";
+      lbl.innerHTML = `<b>⚠️ 냉매 불일치</b>`; labelLayer.appendChild(lbl);
+    } else if (showRes) {
+      const lbl = document.createElement("div"); lbl.className = "pipe-label";
+      lbl.style.left = labelPos.x + "px"; lbl.style.top = labelPos.y + "px"; lbl.style.borderColor = col;
+      lbl.innerHTML = `<b>${edge.stream.P_bar.toFixed(1)} bar</b> | <b style="color:${col}">${edge.stream.T_C.toFixed(1)}°C</b>`;
+      labelLayer.appendChild(lbl);
+    }
+  });
+
+  // 2) 팬 <-> 핀-플레이트 열교환기 공기측 직결 배관 (air)
+  edges.filter(e => e.kind === "air").forEach(edge => {
+    const p1 = getPortGlobal(edge.from, true, "air"), p2 = getPortGlobal(edge.to, false, "air");
+    const { d, labelPos } = buildOrthoPipe(p1, p2);
+    const fanNode = nodes.find(x => (x.id === edge.from || x.id === edge.to) && x.type === "fan");
+    const showRes = appMode === "solver" && fanNode && fanNode.result && fanNode.result.metrics;
+
+    const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    g.setAttribute("class", "pipe-group" + (selectedEdgeId === edge.id ? " selected" : ""));
+    g.onclick = e => {
+      e.stopPropagation();
+      selectedNodeIds.clear(); selectedEdgeId = edge.id;
+      document.querySelectorAll(".node").forEach(nd => nd.classList.remove("selected"));
+      renderWires(); renderInspector();
+    };
+    const pCasing = document.createElementNS("http://www.w3.org/2000/svg", "path"); pCasing.setAttribute("d", d); pCasing.setAttribute("class", "pipe-casing"); pCasing.setAttribute("style", "stroke:#0891b2;stroke-width:9;");
+    const pCore = document.createElementNS("http://www.w3.org/2000/svg", "path"); pCore.setAttribute("d", d); pCore.setAttribute("class", "pipe-core"); pCore.setAttribute("stroke", "#38bdf8"); pCore.setAttribute("style", "stroke-width:5;");
+    const pFlow = document.createElementNS("http://www.w3.org/2000/svg", "path"); pFlow.setAttribute("d", d); pFlow.setAttribute("class", "pipe-flow"); pFlow.style.animationDuration = "0.75s";
+    g.append(pCasing, pCore, pFlow); wireSvg.appendChild(g);
+
+    if (showRes) {
+      const m = fanNode.result.metrics;
+      const lbl = document.createElement("div"); lbl.className = "pipe-label";
+      lbl.style.left = labelPos.x + "px"; lbl.style.top = labelPos.y + "px"; lbl.style.borderColor = "#0891b2";
+      lbl.innerHTML = `<b style="color:#0891b2">🌀 Air ${m.Q_op_m3min.toFixed(1)} CMM (${m.m_air_kgs.toFixed(2)} kg/s)</b>`;
+      labelLayer.appendChild(lbl);
+    }
+  });
+
+  // 3) 신호 컴포넌트 -> 타겟 컴포넌트(열교환기/압축기/팬) 물리적 신호선 (signal)
+  edges.filter(e => e.kind === "signal").forEach(edge => {
+    const p1 = getPortGlobal(edge.from, true, "sig_out"), p2 = getPortGlobal(edge.to, false, "sig_in");
+    const { d, labelPos } = buildOrthoPipe(p1, p2);
+    const sigNode = nodes.find(x => x.id === edge.from);
+    const sigVal = sigNode ? SM.evalSignalNode(sigNode, getSimConfig().t_sec) : 0;
+
+    const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    g.setAttribute("class", "pipe-group" + (selectedEdgeId === edge.id ? " selected" : ""));
+    g.onclick = e => {
+      e.stopPropagation();
+      selectedNodeIds.clear(); selectedEdgeId = edge.id;
+      document.querySelectorAll(".node").forEach(nd => nd.classList.remove("selected"));
+      renderWires(); renderInspector();
+    };
+    const hitPath = document.createElementNS("http://www.w3.org/2000/svg", "path"); hitPath.setAttribute("d", d); hitPath.setAttribute("style", "fill:none;stroke:transparent;stroke-width:12;");
+    const ln = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    ln.setAttribute("d", d);
+    ln.setAttribute("class", "signal-line");
+    ln.setAttribute("style", `stroke:${selectedEdgeId===edge.id?'#0284c7':'#d97706'};stroke-width:2.8;`);
+    g.append(hitPath, ln); wireSvg.appendChild(g);
+
+    const lbl = document.createElement("div"); lbl.className = "pipe-label";
+    lbl.style.left = labelPos.x + "px"; lbl.style.top = labelPos.y + "px"; lbl.style.borderColor = "#d97706";
+    lbl.innerHTML = `<b style="color:#b45309">⚡ ${sigVal.toFixed(2)}</b>`;
+    labelLayer.appendChild(lbl);
+  });
+
+  // 4) 센서 측정 탭선(파랑 점선) & TXV 제어 신호선(초록 점선) 렌더링
+  nodes.filter(n => SM.isSensorType(n.type)).forEach(s => {
+    const sx = s.x + 32, sy = s.y + 32;
+    if (s.params.measureEdgeId && edgeCenters.has(s.params.measureEdgeId)) {
+      const ep = edgeCenters.get(s.params.measureEdgeId);
+      const ln = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      ln.setAttribute("d", `M ${sx} ${sy} L ${ep.x} ${ep.y}`);
+      ln.setAttribute("class", "tap-line");
+      wireSvg.appendChild(ln);
+    }
+    nodes.filter(v => v.type === "valve" && v.params.valve_mode === "txv_sh" && v.params.sensorNodeId === s.id).forEach(v => {
+      const vx = v.x + 50, vy = v.y + 50;
+      const ln = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      ln.setAttribute("d", `M ${sx} ${sy} Q ${(sx+vx)/2} ${Math.min(sy,vy) - 45} ${vx} ${vy}`);
+      ln.setAttribute("class", "signal-line");
+      wireSvg.appendChild(ln);
+    });
+  });
+}
+
+// ================= 시뮬레이션 실행 =================
+let simRunId = 0;
+async function runSimulation(animateProgress = false) {
+  const myId = ++simRunId;
+  const val = SM.validateCircuit(nodes, edges);
+  mismatchEdgeIds = val.mismatchEdgeIds;
+  const vBanner = document.getElementById("validationBanner");
+  const svPill = document.getElementById("svStatusPill");
+
+  if (!val.ok) {
+    vBanner.style.display = "block"; vBanner.innerHTML = "⚠️ 실행 불가: " + val.errors[0];
+    svPill.className = "cons-pill err"; svPill.textContent = "검증 오류";
+    nodes.forEach(n => (n.result = null)); edges.forEach(e => (e.stream = null));
+    renderNodes(); renderWires(); renderInspector(); return;
+  }
+  vBanner.style.display = "none";
+
+  const { fluidName, refProp } = getActiveFluidInfo();
+  const opts = getSolverOpts(); opts.delayMs = animateProgress ? 10 : 0;
+
+  const { simNodes, simEdges, convergence } = await SM.solveAsync(nodes, edges, fluidName, refProp, opts, ({ iter, maxIter }) => {
+    if (myId !== simRunId) return;
+    svPill.className = "cons-pill"; svPill.textContent = `계산중 ${iter}/${maxIter}`;
+  });
+
+  if (myId !== simRunId) return;
+  nodes.forEach((n, i) => (n.result = simNodes[i].result));
+  edges.forEach((e, i) => (e.stream = simEdges[i].stream));
+  lastConvergence = convergence;
+
+  if (convergence.loop_mode === "open") { svPill.className = "cons-pill"; svPill.textContent = "개회로 (1회)"; }
+  else if (convergence.converged) { svPill.className = "cons-pill ok"; svPill.textContent = `수렴 (${convergence.iterations}/${convergence.maxIter}회)`; }
+  else { svPill.className = "cons-pill err"; svPill.textContent = `미수렴 (${convergence.iterations}/${convergence.maxIter}회)`; }
+
+  const cons = convergence.conservation;
+  if (cons) {
+    const pm = document.getElementById("pillMass"), pe = document.getElementById("pillEnergy"), pp = document.getElementById("pillMomentum");
+    pm.className = "cons-pill " + (Math.abs(cons.mass.residual_g) < 5 ? "ok" : "warn");
+    pm.textContent = `질량(${cons.mass.charge_mode==='auto'?'자동':'수동'}): ${cons.mass.total_g.toFixed(0)}g`;
+    pe.className = "cons-pill " + (cons.energy.residual_pct < 2.0 ? "ok" : "warn");
+    pe.textContent = `에너지 ΔE: ${cons.energy.residual_kW.toFixed(2)}kW`;
+    pp.className = "cons-pill " + (cons.momentum.residual_bar < 0.05 ? "ok" : "warn");
+    pp.textContent = `모멘텀 ΣΔP: ${cons.momentum.dP_loop_bar.toFixed(2)}b`;
+  }
+
+  renderChromeTabs(); renderNodes(); renderWires(); renderInspector(); drawPlot();
+}
+
+// ================= P-h / T-s / 스윕 플랏터 =================
+const plotModeEl = document.getElementById("plotMode"), sweepXEl = document.getElementById("sweepX"), plotYEl = document.getElementById("plotY");
+const SWEEP_VARS = [{ key: "COP", label: "시스템 COP" }, { key: "Q_evap", label: "냉동능력 Q_evap [kW]" }, { key: "W_shaft", label: "압축기 축동력 [kW]" }, { key: "T2_C", label: "토출온도 T2 [°C]" }];
+let pView = { xMin: 150, xMax: 500, yMin: 1, yMax: 35, xLog: false, yLog: true }, pDrag = null;
+const PAD = { L: 54, R: 20, T: 20, B: 28 };
+
+function getLogTicks(minV, maxV) {
+  const ticks = [], pMin = Math.floor(Math.log10(Math.max(1e-4, minV))), pMax = Math.ceil(Math.log10(Math.max(1e-3, maxV)));
+  for (let p = pMin; p <= pMax; p++) { const b = Math.pow(10, p); [1, 2, 5].forEach(m => { const v = b * m; if (v >= minV * 0.99 && v <= maxV * 1.01) ticks.push(v); }); }
+  return ticks;
+}
+function computeAutoPlotView() {
+  const { refProp } = getActiveFluidInfo(); if (!refProp || !refProp.sat) return;
+  const sat = refProp.sat, mode = plotModeEl.value;
+  if (mode === "ph") pView = { xMin: Math.floor((Math.min(...sat.h_f) - 20) / 10) * 10, xMax: Math.ceil((Math.max(...sat.h_g) + 55) / 10) * 10, yMin: Math.max(0.5, sat.P[0] * 0.8), yMax: sat.P[sat.P.length - 1] * 1.2, xLog: false, yLog: true };
+  else if (mode === "ts") pView = { xMin: Number((Math.min(...sat.s_f) - 0.1).toFixed(2)), xMax: Number((Math.max(...sat.s_g) + 0.15).toFixed(2)), yMin: Math.floor((Math.min(...sat.T_sat) - 10) / 10) * 10, yMax: Math.ceil((Math.max(...sat.T_sat) + 35) / 10) * 10, xLog: false, yLog: false };
+  document.getElementById("plotXLog").checked = pView.xLog; document.getElementById("plotYLog").checked = pView.yLog;
+}
+function getPlotMapper(W, H) {
+  const pW = W - PAD.L - PAD.R, pH = H - PAD.T - PAD.B;
+  const x0 = pView.xLog ? Math.log10(Math.max(1e-4, pView.xMin)) : pView.xMin, x1 = pView.xLog ? Math.log10(Math.max(1e-3, pView.xMax)) : pView.xMax;
+  const y0 = pView.yLog ? Math.log10(Math.max(1e-4, pView.yMin)) : pView.yMin, y1 = pView.yLog ? Math.log10(Math.max(1e-3, pView.yMax)) : pView.yMax;
+  return { pW, pH, xOf: x => PAD.L + (((pView.xLog ? Math.log10(Math.max(1e-4, x)) : x) - x0) / (x1 - x0 || 1e-9)) * pW, yOf: y => (H - PAD.B) - (((pView.yLog ? Math.log10(Math.max(1e-4, y)) : y) - y0) / (y1 - y0 || 1e-9)) * pH, invX: px => { const v = x0 + ((px - PAD.L) / pW) * (x1 - x0); return pView.xLog ? Math.pow(10, v) : v; }, invY: py => { const v = y0 + ((H - PAD.B - py) / pH) * (y1 - y0); return pView.yLog ? Math.pow(10, v) : v; } };
+}
+function syncPlotOptions() {
+  const m = plotModeEl.value, isDia = (m === "ph" || m === "ts");
+  sweepXEl.style.display = isDia ? "none" : "inline-block"; plotYEl.style.display = isDia ? "none" : "inline-block";
+  ["lblXLog","lblYLog","lblIso1","lblIsoX","lblIsoRho","autoScaleBtn"].forEach(id => document.getElementById(id).style.display = isDia ? "inline-flex" : "none");
+  if (!isDia) plotYEl.innerHTML = SWEEP_VARS.map(v => `<option value="${v.key}">${v.label}</option>`).join("");
+  computeAutoPlotView(); drawPlot();
+}
+plotModeEl.onchange = syncPlotOptions; sweepXEl.onchange = drawPlot; plotYEl.onchange = drawPlot;
+["chkIsoMain","chkIsoX","chkIsoRho"].forEach(id => document.getElementById(id).onchange = drawPlot);
+document.getElementById("plotXLog").onchange = e => { pView.xLog = e.target.checked; if (pView.xLog && pView.xMin <= 0) pView.xMin = 0.1; drawPlot(); };
+document.getElementById("plotYLog").onchange = e => { pView.yLog = e.target.checked; if (pView.yLog && pView.yMin <= 0) pView.yMin = 0.1; drawPlot(); };
+document.getElementById("autoScaleBtn").onclick = () => { computeAutoPlotView(); drawPlot(); };
+
+function drawPlot() {
+  const cvs = document.getElementById("plotCanvas"), rect = cvs.getBoundingClientRect(); if (rect.width < 50 || rect.height < 50) return;
+  const dpr = window.devicePixelRatio || 1, W = Math.floor(rect.width), H = Math.floor(rect.height);
+  if (cvs.width !== Math.floor(W * dpr) || cvs.height !== Math.floor(H * dpr)) { cvs.width = Math.floor(W * dpr); cvs.height = Math.floor(H * dpr); }
+  const ctx = cvs.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, W, H);
+  lastExportRows = [];
+  const { fluidName, refProp } = getActiveFluidInfo(), mode = plotModeEl.value;
+  if ((mode === "ph" || mode === "ts") && refProp && refProp.sat) {
+    const sat = refProp.sat, iso = refProp.isolines, m = getPlotMapper(W, H);
+    ctx.strokeStyle = "#e2e8f0"; ctx.lineWidth = 1; ctx.fillStyle = "#334155"; ctx.font = "10px sans-serif";
+    ctx.textAlign = "center";
+    if (pView.xLog) getLogTicks(pView.xMin, pView.xMax).forEach(xv => { const gx = m.xOf(xv); ctx.beginPath(); ctx.moveTo(gx, PAD.T); ctx.lineTo(gx, H - PAD.B); ctx.stroke(); ctx.fillText(xv >= 1 ? xv.toFixed(0) : xv.toFixed(2), gx, H - PAD.B + 14); });
+    else for (let i = 0; i <= 6; i++) { const xv = pView.xMin + (pView.xMax - pView.xMin) * i / 6, gx = m.xOf(xv); ctx.beginPath(); ctx.moveTo(gx, PAD.T); ctx.lineTo(gx, H - PAD.B); ctx.stroke(); ctx.fillText(mode === "ph" ? xv.toFixed(0) : xv.toFixed(2), gx, H - PAD.B + 14); }
+    ctx.textAlign = "right";
+    if (pView.yLog) getLogTicks(pView.yMin, pView.yMax).forEach(yv => { const gy = m.yOf(yv); ctx.beginPath(); ctx.moveTo(PAD.L, gy); ctx.lineTo(W - PAD.R, gy); ctx.stroke(); ctx.fillText(yv >= 1 ? Number(yv.toFixed(1)) + "" : yv.toFixed(2), PAD.L - 6, gy + 3); });
+    else for (let i = 0; i <= 5; i++) { const yv = pView.yMin + (pView.yMax - pView.yMin) * i / 5, gy = m.yOf(yv); ctx.beginPath(); ctx.moveTo(PAD.L, gy); ctx.lineTo(W - PAD.R, gy); ctx.stroke(); ctx.fillText(yv.toFixed(0), PAD.L - 6, gy + 3); }
+
+    ctx.save(); ctx.beginPath(); ctx.rect(PAD.L, PAD.T, m.pW, m.pH); ctx.clip();
+    if (document.getElementById("chkIsoX").checked) { ctx.strokeStyle = "#fbcfe8"; ctx.lineWidth = 1; for (let xi = 2; xi <= 8; xi += 2) { const q = xi / 10; ctx.beginPath(); sat.P.forEach((p, i) => { const x = m.xOf(mode === "ph" ? sat.h_f[i] + q * (sat.h_g[i] - sat.h_f[i]) : sat.s_f[i] + q * (sat.s_g[i] - sat.s_f[i])), y = m.yOf(mode === "ph" ? p : sat.T_sat[i]); i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); }); ctx.stroke(); } }
+    if (document.getElementById("chkIsoMain").checked && iso) { ctx.strokeStyle = "#cbd5e1"; ctx.lineWidth = 1; ctx.fillStyle = "#64748b"; ctx.font = "9.5px sans-serif"; ctx.textAlign = "left"; if (mode === "ph") iso.isotherms.forEach(l => { ctx.beginPath(); l.pts.forEach((pt, i) => i === 0 ? ctx.moveTo(m.xOf(pt.h), m.yOf(pt.P)) : ctx.lineTo(m.xOf(pt.h), m.yOf(pt.P))); ctx.stroke(); const lp = l.pts[l.pts.length - 1]; if (lp) ctx.fillText(`${l.T}°`, m.xOf(lp.h) + 2, m.yOf(lp.P)); }); else iso.isobars.forEach(l => { ctx.beginPath(); l.pts.forEach((pt, i) => i === 0 ? ctx.moveTo(m.xOf(pt.s), m.yOf(pt.T)) : ctx.lineTo(m.xOf(pt.s), m.yOf(pt.T))); ctx.stroke(); const lp = l.pts[l.pts.length - 1]; if (lp) ctx.fillText(`${l.P}b`, m.xOf(lp.s) - 18, m.yOf(lp.T) - 2); }); }
+    if (document.getElementById("chkIsoRho").checked && iso?.isochores) { ctx.strokeStyle = "#14b8a6"; ctx.lineWidth = 1; ctx.setLineDash([3, 3]); iso.isochores.forEach(l => { ctx.beginPath(); l.pts.forEach((pt, i) => { const x = m.xOf(mode === "ph" ? pt.h : pt.s), y = m.yOf(mode === "ph" ? pt.P : pt.T); i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); }); ctx.stroke(); }); ctx.setLineDash([]); }
+    ctx.lineWidth = 2.2;
+    ctx.strokeStyle = "#0284c7"; ctx.beginPath(); sat.P.forEach((p, i) => { const x = m.xOf(mode === "ph" ? sat.h_f[i] : sat.s_f[i]), y = m.yOf(mode === "ph" ? p : sat.T_sat[i]); i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); }); ctx.stroke();
+    ctx.strokeStyle = "#ea580c"; ctx.beginPath(); sat.P.forEach((p, i) => { const x = m.xOf(mode === "ph" ? sat.h_g[i] : sat.s_g[i]), y = m.yOf(mode === "ph" ? p : sat.T_sat[i]); i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); }); ctx.stroke();
+
+    if (appMode === "solver") {
+      const comp = nodes.find(n => n.type === "compressor" && n.result);
+      const cond = nodes.find(n => SM.isHxType(n.type) && n.result && n.result.metrics.isCondenser);
+      const valv = nodes.find(n => n.type === "valve" && n.result);
+      const evap = nodes.find(n => SM.isHxType(n.type) && n.result && !n.result.metrics.isCondenser);
+      const acc  = nodes.find(n => n.type === "receiver" && n.result);
+      const pts = [];
+      if (comp) pts.push({ tag: "1", s: comp.result.inlet }, { tag: "2", s: comp.result.outlet });
+      if (cond) pts.push({ tag: "3", s: cond.result.outlet });
+      if (valv) pts.push({ tag: "4", s: valv.result.outlet });
+      if (evap) pts.push({ tag: "5", s: evap.result.outlet });
+      if (acc) pts.push({ tag: "1'", s: acc.result.outlet });
+      pts.forEach(p => lastExportRows.push({ State: p.tag, P_bar: p.s.P_bar.toFixed(3), T_C: p.s.T_C.toFixed(2), h_kJkg: p.s.h_kJkg.toFixed(2), s_kJkgK: (p.s.s_kJkgK||0).toFixed(4), rho: (p.s.rho||0).toFixed(2) }));
+      if (pts.length >= 2) {
+        ctx.strokeStyle = "#111827"; ctx.lineWidth = 2.4; ctx.beginPath();
+        pts.forEach((pt, i) => { const x = m.xOf(mode === "ph" ? pt.s.h_kJkg : pt.s.s_kJkgK), y = m.yOf(mode === "ph" ? pt.s.P_bar : pt.s.T_C); i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); });
+        ctx.stroke();
+        pts.forEach(pt => {
+          const cx = m.xOf(mode === "ph" ? pt.s.h_kJkg : pt.s.s_kJkgK), cy = m.yOf(mode === "ph" ? pt.s.P_bar : pt.s.T_C);
+          ctx.fillStyle = CV.tempToCFDColor(pt.s.T_C); ctx.beginPath(); ctx.arc(cx, cy, 4.8, 0, Math.PI * 2); ctx.fill();
+          ctx.strokeStyle = "#fff"; ctx.lineWidth = 1.4; ctx.stroke();
+          ctx.fillStyle = "#0f172a"; ctx.font = "bold 11px sans-serif"; ctx.textAlign = "left";
+          ctx.fillText(`${pt.tag}(${pt.s.T_C.toFixed(0)}°C)`, cx + 6, cy - 4);
+        });
+      }
+    }
+    if (pDrag && pDrag.type === "zoom") { ctx.fillStyle = "rgba(2,132,199,0.15)"; ctx.strokeStyle = "#0284c7"; ctx.lineWidth = 1.2; ctx.fillRect(Math.min(pDrag.sx, pDrag.cx), Math.min(pDrag.sy, pDrag.cy), Math.abs(pDrag.cx - pDrag.sx), Math.abs(pDrag.cy - pDrag.sy)); ctx.strokeRect(Math.min(pDrag.sx, pDrag.cx), Math.min(pDrag.sy, pDrag.cy), Math.abs(pDrag.cx - pDrag.sx), Math.abs(pDrag.cy - pDrag.sy)); }
+    ctx.restore();
+    ctx.strokeStyle = "#1e293b"; ctx.lineWidth = 1.4; ctx.strokeRect(PAD.L, PAD.T, m.pW, m.pH);
+    ctx.fillStyle = "#0f172a"; ctx.font = "bold 11.5px sans-serif"; ctx.textAlign = "center";
+    ctx.fillText(`${fluidName} (CoolProp) — ${mode === "ph" ? "P-h 선도" : "T-s 선도"}`, PAD.L + m.pW / 2, 14);
+    return;
+  }
+  const xKey = sweepXEl.value, yKey = plotYEl.value, [minX, maxX] = xKey === "rpm" ? [1500, 5500] : [8, 25];
+  const labels = [], values = [];
+  for (let i = 0; i <= 10; i++) {
+    const xv = minX + (maxX - minX) * i / 10;
+    const { simNodes } = SM.solve(nodes, edges, fluidName, refProp, { ...getSolverOpts(), override: { [xKey]: xv } });
+    const comp = simNodes.find(n => n.type === "compressor" && n.result), evap = simNodes.find(n => SM.isHxType(n.type) && n.result && !n.result.metrics.isCondenser);
+    if (!comp) continue;
+    const cop = (evap && comp.result.metrics.W_shaft_kW > 0) ? evap.result.metrics.Q_kW / comp.result.metrics.W_shaft_kW : 0;
+    lastExportRows.push({ [xKey]: xv.toFixed(1), T2_C: comp.result.outlet.T_C.toFixed(2), W_shaft_kW: comp.result.metrics.W_shaft_kW.toFixed(3), Q_evap_kW: evap ? evap.result.metrics.Q_kW.toFixed(3) : "", COP: cop.toFixed(3) });
+    labels.push(xv.toFixed(0)); values.push(yKey === "COP" ? cop : (yKey === "Q_evap" && evap ? evap.result.metrics.Q_kW : (yKey === "W_shaft" ? comp.result.metrics.W_shaft_kW : comp.result.outlet.T_C)));
+  }
+  if (values.length < 2) return;
+  const pW = W - PAD.L - PAD.R, pH = H - PAD.T - PAD.B, minY = Math.min(...values) * 0.94, maxY = Math.max(...values) * 1.06 + 1e-4;
+  const xOf = i => PAD.L + (pW * i) / (values.length - 1), yOf = v => (H - PAD.B) - ((v - minY) / (maxY - minY)) * pH;
+  ctx.strokeStyle = "#e2e8f0"; ctx.fillStyle = "#334155"; ctx.font = "10px sans-serif"; ctx.textAlign = "right";
+  for (let i = 0; i <= 4; i++) { const gy = PAD.T + (pH * i) / 4; ctx.beginPath(); ctx.moveTo(PAD.L, gy); ctx.lineTo(W - PAD.R, gy); ctx.stroke(); ctx.fillText((maxY - (maxY - minY) * i / 4).toFixed(2), PAD.L - 6, gy + 3); }
+  ctx.strokeStyle = "#1e293b"; ctx.strokeRect(PAD.L, PAD.T, pW, pH);
+  ctx.strokeStyle = "#0284c7"; ctx.lineWidth = 2.4; ctx.beginPath(); values.forEach((v, i) => i === 0 ? ctx.moveTo(xOf(i), yOf(v)) : ctx.lineTo(xOf(i), yOf(v))); ctx.stroke();
+  ctx.textAlign = "center";
+  values.forEach((v, i) => { ctx.fillStyle = "#ea580c"; ctx.beginPath(); ctx.arc(xOf(i), yOf(v), 3.8, 0, Math.PI * 2); ctx.fill(); if (i % 2 === 0) { ctx.fillStyle = "#334155"; ctx.fillText(labels[i], xOf(i), H - PAD.B + 14); } });
+}
+
+function drawSolverChart(history, canvasId = "dtSolverCanvas") {
+  const cvs = document.getElementById(canvasId); if (!cvs) return;
+  const rect = cvs.getBoundingClientRect(); if (rect.width < 40 || rect.height < 40) return;
+  const dpr = window.devicePixelRatio || 1, W = Math.floor(rect.width), H = Math.floor(rect.height);
+  cvs.width = Math.floor(W * dpr); cvs.height = Math.floor(H * dpr);
+  const ctx = cvs.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, W, H);
+  if (!history || history.length < 2) { ctx.fillStyle = "#64748b"; ctx.font = "12px sans-serif"; ctx.textAlign = "center"; ctx.fillText("폐회로 솔버 실행 후 반복 잔차 곡선이 표시됩니다.", W / 2, H / 2); return; }
+  const pad = { L: 54, R: 18, T: 22, B: 26 }, pW = W - pad.L - pad.R, pH = H - pad.T - pad.B;
+  const maxVal = Math.max(1e-3, ...history.map(h => Math.max(h.resT, h.resH, h.resP)));
+  const minLog = -3, maxLog = Math.ceil(Math.log10(maxVal * 1.5));
+  const xOf = i => pad.L + (i / (history.length - 1)) * pW;
+  const yOf = v => { const lv = Math.max(minLog, Math.log10(Math.max(1e-4, v))); return (H - pad.B) - ((lv - minLog) / (maxLog - minLog || 1)) * pH; };
+  ctx.strokeStyle = "#e2e8f0"; ctx.fillStyle = "#475569"; ctx.font = "10px sans-serif"; ctx.textAlign = "right";
+  for (let p = minLog; p <= maxLog; p++) { const gy = yOf(Math.pow(10, p)); ctx.beginPath(); ctx.moveTo(pad.L, gy); ctx.lineTo(W - pad.R, gy); ctx.stroke(); ctx.fillText("1e" + p, pad.L - 6, gy + 3); }
+  ctx.strokeStyle = "#1e293b"; ctx.strokeRect(pad.L, pad.T, pW, pH);
+  [{ key: "resT", col: "#0284c7", label: "ΔT [K]" }, { key: "resH", col: "#7c3aed", label: "Δh [kJ/kg]" }, { key: "resP", col: "#ea580c", label: "ΔP [bar]" }].forEach((s, idx) => {
+    ctx.strokeStyle = s.col; ctx.lineWidth = 2; ctx.beginPath(); history.forEach((h, i) => { const x = xOf(i), y = yOf(h[s.key]); i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); }); ctx.stroke();
+    ctx.fillStyle = s.col; ctx.textAlign = "left"; ctx.fillText("■ " + s.label, pad.L + 8 + idx * 85, 14);
+  });
+}
+
+const plotCvs = document.getElementById("plotCanvas");
+plotCvs.addEventListener("mousedown", e => { if (plotModeEl.value === "sweep") return; const r = plotCvs.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top; pDrag = { type: e.shiftKey ? "pan" : "zoom", sx: x, sy: y, cx: x, cy: y, sv: { ...pView } }; });
+window.addEventListener("mousemove", e => {
+  if (!pDrag) return;
+  const r = plotCvs.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top; pDrag.cx = x; pDrag.cy = y;
+  if (pDrag.type === "pan") {
+    const m = getPlotMapper(r.width, r.height);
+    if (pView.xLog) { const l0 = Math.log10(Math.max(1e-4, pDrag.sv.xMin)), l1 = Math.log10(Math.max(1e-3, pDrag.sv.xMax)), dl = ((pDrag.sx - x) / m.pW) * (l1 - l0); pView.xMin = Math.pow(10, l0 + dl); pView.xMax = Math.pow(10, l1 + dl); }
+    else { const dx = ((pDrag.sx - x) / m.pW) * (pDrag.sv.xMax - pDrag.sv.xMin); pView.xMin = pDrag.sv.xMin + dx; pView.xMax = pDrag.sv.xMax + dx; }
+    if (pView.yLog) { const l0 = Math.log10(Math.max(1e-4, pDrag.sv.yMin)), l1 = Math.log10(Math.max(1e-3, pDrag.sv.yMax)), dl = ((y - pDrag.sy) / m.pH) * (l1 - l0); pView.yMin = Math.pow(10, l0 + dl); pView.yMax = Math.pow(10, l1 + dl); }
+    else { const dy = ((y - pDrag.sy) / m.pH) * (pDrag.sv.yMax - pDrag.sv.yMin); pView.yMin = pDrag.sv.yMin + dy; pView.yMax = pDrag.sv.yMax + dy; }
+  }
+  drawPlot();
+});
+window.addEventListener("mouseup", () => {
+  if (pDrag && pDrag.type === "zoom" && Math.abs(pDrag.cx - pDrag.sx) > 8 && Math.abs(pDrag.cy - pDrag.sy) > 8) {
+    const r = plotCvs.getBoundingClientRect(), m = getPlotMapper(r.width, r.height);
+    pView.xMin = Math.min(m.invX(pDrag.sx), m.invX(pDrag.cx)); pView.xMax = Math.max(m.invX(pDrag.sx), m.invX(pDrag.cx));
+    pView.yMin = Math.min(m.invY(pDrag.sy), m.invY(pDrag.cy)); pView.yMax = Math.max(m.invY(pDrag.sy), m.invY(pDrag.cy));
+  }
+  if (pDrag) { pDrag = null; drawPlot(); }
+});
+plotCvs.addEventListener("wheel", e => {
+  if (plotModeEl.value === "sweep") return; e.preventDefault();
+  const r = plotCvs.getBoundingClientRect(), m = getPlotMapper(r.width, r.height), cx = m.invX(e.clientX - r.left), cy = m.invY(e.clientY - r.top), f = e.deltaY > 0 ? 1.15 : 0.85;
+  if (pView.xLog) { const lc = Math.log10(Math.max(1e-4, cx)), l0 = Math.log10(Math.max(1e-4, pView.xMin)), l1 = Math.log10(Math.max(1e-3, pView.xMax)); pView.xMin = Math.max(1e-4, Math.pow(10, lc - (lc - l0) * f)); pView.xMax = Math.pow(10, lc + (l1 - lc) * f); }
+  else { pView.xMin = cx - (cx - pView.xMin) * f; pView.xMax = cx + (pView.xMax - cx) * f; }
+  if (pView.yLog) { const lc = Math.log10(Math.max(1e-4, cy)), l0 = Math.log10(Math.max(1e-4, pView.yMin)), l1 = Math.log10(Math.max(1e-3, pView.yMax)); pView.yMin = Math.max(1e-4, Math.pow(10, lc - (lc - l0) * f)); pView.yMax = Math.pow(10, lc + (l1 - lc) * f); }
+  else { pView.yMin = cy - (cy - pView.yMin) * f; pView.yMax = cy + (pView.yMax - cy) * f; }
+  drawPlot();
+}, { passive: false });
+plotCvs.addEventListener("dblclick", () => { computeAutoPlotView(); drawPlot(); });
+document.getElementById("copyPlotBtn").onclick = () => plotCvs.toBlob(async blob => { try { await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]); alert("복사 완료!"); } catch { const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `cycle_${plotModeEl.value}.png`; a.click(); } }, "image/png");
+document.getElementById("exportCsvBtn").onclick = () => { if (!lastExportRows.length) return; const h = Object.keys(lastExportRows[0]), csv = "\uFEFF" + [h.join(","), ...lastExportRows.map(r => h.map(k => r[k]).join(","))].join("\n"); const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8;" })); a.download = `cycle_${plotModeEl.value}.csv`; a.click(); };
+
+// ================= 노드 인터랙션 (핀-플레이트 4포트 · 팬 공기포트 · 신호 직결 포트 지원) =================
+let dragMode = null, dragStart = { x: 0, y: 0 }, initialNodePos = new Map(), connectingFrom = null, connectingKind = "flow", tempWireEl = null;
+function renderNodes() {
+  nodeLayer.innerHTML = "";
+  const showRes = appMode === "solver";
+  nodes.forEach(n => {
+    const compact = isCompactNode(n.type);
+    const el = document.createElement("div"); el.className = "node" + (compact ? " node-compact" : "") + (selectedNodeIds.has(n.id) ? " selected" : "");
+    el.style.left = n.x + "px"; el.style.top = n.y + "px"; el.dataset.id = n.id;
+    let cap = `<b>${n.modelName}</b>`;
+    if (n.type === "solver") cap = `<b style="color:#0284c7">${n.modelName}</b>`;
+    else if (n.type === "refrigerant") cap = `<b style="color:#0891b2">${n.params.fluid}</b>`;
+    else if (SM.isSignalType(n.type)) {
+      const svVal = SM.evalSignalNode(n, getSimConfig().t_sec);
+      cap = `<b style="color:#d97706">${n.modelName}</b><br>출력: <b>${Number(svVal.toFixed(2))}</b>`;
+    } else if (SM.isSensorType(n.type)) {
+      cap = showRes && n.result && n.result.connected
+        ? `<b style="color:#15803d">${n.modelName}</b><br>${n.type==='sensor_p'?n.result.P_bar.toFixed(2)+'b':(n.type==='sensor_t'?n.result.T_C.toFixed(1)+'°C':'SH:'+n.result.SH.toFixed(1)+'K')}`
+        : `<b>${n.modelName}</b>`;
+    } else if (n.type === "fan") {
+      cap = showRes && n.result && n.result.metrics
+        ? `<b style="color:#0891b2">${n.modelName}</b><br>풍량:<b>${n.result.metrics.Q_op_m3min.toFixed(1)}CMM</b> (${n.result.metrics.m_air_kgs.toFixed(2)}kg/s)`
+        : `<b style="color:#0891b2">${n.modelName}</b>`;
+    } else if (showRes && n.result) {
+      if (n.type === "compressor") cap = `<b style="color:#ea580c">${n.modelName}</b><br>T2:<b>${n.result.outlet.T_C.toFixed(1)}°C</b> | W:${n.result.metrics.W_shaft_kW.toFixed(2)}kW`;
+      else if (SM.isHxType(n.type)) { const c = n.result.metrics.isCondenser ? "#16a34a" : "#0284c7"; cap = `<b style="color:${c}">${n.modelName}</b><br>Q:<b>${n.result.metrics.Q_kW.toFixed(2)}kW</b> | ΔP:${n.result.metrics.dP_bar.toFixed(2)}b`; }
+      else if (n.type === "receiver") cap = `<b style="color:#0284c7">${n.modelName}</b><br>액위:<b>${n.result.metrics.level_pct.toFixed(0)}%</b> | ${(n.result.metrics.mass_kg*1000).toFixed(0)}g`;
+      else if (n.type === "valve") cap = `<b style="color:#7c3aed">${n.modelName}</b><br>개도:<b>${n.result.metrics.opening_pct.toFixed(0)}%</b> | Cd:${(n.result.metrics.Cd_eff||0.65).toFixed(2)}`;
+    }
+    const isFlow = SM.isFlowNode(n.type);
+    const pIn = getPortLocal(n.rot, false, "flow"), pOut = getPortLocal(n.rot, true, "flow");
+    let portsHTML = isFlow
+      ? `<div class="port port-in" data-pkind="flow" data-pdir="in" title="냉매 입구" style="left:${pIn.x}px;top:${pIn.y}px;"></div>
+         <div class="port port-out" data-pkind="flow" data-pdir="out" title="냉매 출구" style="left:${pOut.x}px;top:${pOut.y}px;"></div>`
+      : "";
+
+    // 핀-플레이트 열교환기: 팬 직접 부착을 위한 공기측 포트 2개(공기 입구 / 공기 출구) 추가! (총 4포트)
+    if (n.type === "hx_fin_plate") {
+      const aIn = getPortLocal(n.rot, false, "air"), aOut = getPortLocal(n.rot, true, "air");
+      portsHTML += `<div class="port port-air-in" data-pkind="air" data-pdir="in" title="공기측 입구 (팬 연결 포트)" style="left:${aIn.x}px;top:${aIn.y}px;"></div>
+                    <div class="port port-air-out" data-pkind="air" data-pdir="out" title="공기측 출구 (팬 연결 포트)" style="left:${aOut.x}px;top:${aOut.y}px;"></div>`;
+    }
+    // 팬(Fan) 컴포넌트: 공기 토출 포트 1개 + 신호 입력 포트 1개
+    if (n.type === "fan") {
+      const fOut = getPortLocal(n.rot, true, "flow");
+      portsHTML += `<div class="port port-air-out" data-pkind="air" data-pdir="out" title="팬 공기 토출 포트 (핀-플레이트 HX 공기포트에 연결)" style="left:${fOut.x}px;top:${fOut.y}px;"></div>
+                    <div class="port port-sig-in" data-pkind="signal" data-pdir="in" title="RPM 신호 입력 포트" style="left:50px;top:6px;"></div>`;
+    }
+    // 신호 컴포넌트(상수/계단/시나리오): 우측에 신호 출력 포트 1개
+    if (SM.isSignalType(n.type)) {
+      portsHTML += `<div class="port port-sig-out" data-pkind="signal" data-pdir="out" title="신호 출력 포트 (열교환기·압축기·팬의 신호 포트에 드래그 연결)" style="left:64px;top:32px;"></div>`;
+    }
+    // 압축기 및 열교환기: 상단에 신호 입력 포트 1개
+    if (n.type === "compressor" || SM.isHxType(n.type)) {
+      const sigY = n.type === "hx_fin_plate" ? 16 : 6;
+      portsHTML += `<div class="port port-sig-in" data-pkind="signal" data-pdir="in" title="신호 입력 포트 (고정열부하 Q 또는 RPM 신호 연결)" style="left:22px;top:${sigY}px;"></div>`;
+    }
+
+    el.innerHTML = `<button class="node-del">×</button><div class="node-svg-wrap" style="transform:rotate(${n.rot||0}deg)">${getSymbolSVG(n)}</div><div class="node-caption">${cap}</div>${portsHTML}`;
+    el.addEventListener("dblclick", e => {
+      e.stopPropagation();
+      if (SM.isSignalType(n.type)) {
+        selectedNodeIds = new Set([n.id]);
+        renderNodes(); renderInspector();
+        return;
+      }
+      switchTab(n.id);
+    });
+    el.addEventListener("mousedown", e => {
+      e.stopPropagation();
+      if (e.target.classList.contains("node-del")) {
+        nodes = nodes.filter(x => x.id !== n.id); edges = edges.filter(x => x.from !== n.id && x.to !== n.id);
+        selectedNodeIds.delete(n.id); if (activeTabId === n.id) switchTab("canvas");
+        renderChromeTabs(); if (appMode === "solver") runSimulation(); else { renderNodes(); renderWires(); renderInspector(); }
+        return;
+      }
+      if (e.target.classList.contains("port")) return;
+      selectedEdgeId = null;
+      if (e.shiftKey) selectedNodeIds.has(n.id) ? selectedNodeIds.delete(n.id) : selectedNodeIds.add(n.id);
+      else if (!selectedNodeIds.has(n.id)) { selectedNodeIds.clear(); selectedNodeIds.add(n.id); }
+      document.querySelectorAll(".node").forEach(nd => nd.classList.toggle("selected", selectedNodeIds.has(nd.dataset.id)));
+      renderWires(); renderInspector();
+      dragMode = "nodes"; dragStart = clientToCanvas(e.clientX, e.clientY); initialNodePos.clear();
+      nodes.forEach(nd => { if (selectedNodeIds.has(nd.id)) initialNodePos.set(nd.id, { x: nd.x, y: nd.y }); });
+    });
+
+    // 모든 출력 포트(냉매 flow, 팬 공기 air, 신호 signal)에서 드래그 시작 지원
+    el.querySelectorAll('.port[data-pdir="out"]').forEach(pEl => {
+      pEl.addEventListener("mousedown", e => {
+        e.stopPropagation();
+        dragMode = "wire";
+        connectingFrom = n.id;
+        connectingKind = pEl.dataset.pkind || "flow";
+        tempWireEl = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        tempWireEl.setAttribute("class", "temp-wire");
+        if (connectingKind === "signal") tempWireEl.setAttribute("style", "stroke:#d97706;");
+        else if (connectingKind === "air") tempWireEl.setAttribute("style", "stroke:#0891b2;");
+        wireSvg.appendChild(tempWireEl);
+      });
+    });
+
+    // 모든 입력 포트(또는 핀-플레이트의 공기 포트)에서 드롭하여 선 연결 완성
+    el.querySelectorAll(".port").forEach(pEl => {
+      pEl.addEventListener("mouseup", e => {
+        e.stopPropagation();
+        if (dragMode !== "wire" || !connectingFrom || connectingFrom === n.id) return;
+        const targetKind = pEl.dataset.pkind || "flow";
+        const targetDir = pEl.dataset.pdir;
+        if (connectingKind === "flow" && targetKind === "flow" && targetDir === "in") {
+          edges = edges.filter(ed => !(ed.to === n.id && (!ed.kind || ed.kind === "flow")));
+          edges.push({ id: "e" + (nextId++), from: connectingFrom, to: n.id, kind: "flow", stream: null });
+        } else if (connectingKind === "air" && targetKind === "air") {
+          edges = edges.filter(ed => !(ed.kind === "air" && (ed.to === n.id || ed.from === connectingFrom)));
+          edges.push({ id: "e" + (nextId++), from: connectingFrom, to: n.id, kind: "air", stream: null });
+        } else if (connectingKind === "signal" && (targetKind === "signal" || SM.isHxType(n.type) || n.type === "compressor" || n.type === "fan")) {
+          edges = edges.filter(ed => !(ed.kind === "signal" && ed.to === n.id));
+          edges.push({ id: "e" + (nextId++), from: connectingFrom, to: n.id, kind: "signal", stream: null });
+          if (SM.isHxType(n.type)) n.params.sec_mode = "const_Q";
+        }
+        cleanupTempWire();
+        if (appMode === "solver") runSimulation(); else { renderWires(); renderInspector(); }
+      });
+    });
+
+    // 신호 선을 노드 본체 위에 드롭해도 편리하게 연결되도록 허용
+    el.addEventListener("mouseup", e => {
+      if (dragMode === "wire" && connectingFrom && connectingFrom !== n.id) {
+        if (connectingKind === "signal" && (SM.isHxType(n.type) || n.type === "compressor" || n.type === "fan")) {
+          edges = edges.filter(ed => !(ed.kind === "signal" && ed.to === n.id));
+          edges.push({ id: "e" + (nextId++), from: connectingFrom, to: n.id, kind: "signal", stream: null });
+          if (SM.isHxType(n.type)) n.params.sec_mode = "const_Q";
+          cleanupTempWire();
+          if (appMode === "solver") runSimulation(); else { renderWires(); renderInspector(); }
+        } else if (connectingKind === "air" && n.type === "hx_fin_plate") {
+          edges = edges.filter(ed => !(ed.kind === "air" && (ed.to === n.id || ed.from === connectingFrom)));
+          edges.push({ id: "e" + (nextId++), from: connectingFrom, to: n.id, kind: "air", stream: null });
+          cleanupTempWire();
+          if (appMode === "solver") runSimulation(); else { renderWires(); renderInspector(); }
+        }
+      }
+    });
+
+    nodeLayer.appendChild(el);
+  });
+}
+
+window.addEventListener("keydown", e => {
+  if (document.activeElement.tagName === "INPUT" || document.activeElement.tagName === "TEXTAREA") return;
+  if (e.key.toLowerCase() === "r" && selectedNodeIds.size > 0) { nodes.forEach(n => { if (selectedNodeIds.has(n.id) && SM.isFlowNode(n.type)) n.rot = ((n.rot || 0) + 90) % 360; }); renderNodes(); renderWires(); }
+  if (e.key === "Delete" && selectedEdgeId) { edges = edges.filter(ed => ed.id !== selectedEdgeId); selectedEdgeId = null; if (appMode === "solver") runSimulation(); else { renderWires(); renderInspector(); } }
+});
+
+canvasWrap.addEventListener("mousedown", e => {
+  if (e.target !== canvasWrap && e.target !== canvasStage && e.target !== wireSvg) return;
+  if (e.button === 1) { dragMode = "panCanvas"; dragStart = { x: e.clientX - viewPanX, y: e.clientY - viewPanY }; return; }
+  selectedEdgeId = null;
+  if (!e.shiftKey) selectedNodeIds.clear();
+  dragMode = "marquee"; const r = canvasWrap.getBoundingClientRect(); dragStart = { x: e.clientX - r.left, y: e.clientY - r.top };
+  selectBox.style.left = dragStart.x + "px"; selectBox.style.top = dragStart.y + "px"; selectBox.style.width = "0px"; selectBox.style.height = "0px"; selectBox.style.display = "block";
+  document.querySelectorAll(".node").forEach(nd => nd.classList.toggle("selected", selectedNodeIds.has(nd.dataset.id)));
+  renderWires(); renderInspector();
+});
+
+function getPortGlobal(nodeId, isOut, portKind = "flow") {
+  const n = nodes.find(x => x.id === nodeId);
+  if (!n) return { x: 0, y: 0, dx: 1, dy: 0 };
+  if (portKind === "air" && n.type === "fan") {
+    const p = getPortLocal(n.rot, true, "flow");
+    return { x: n.x + p.x, y: n.y + p.y, dx: p.dx, dy: p.dy };
+  }
+  if (portKind === "sig_in" && n.type === "hx_fin_plate") {
+    return { x: n.x + 22, y: n.y + 16, dx: 0, dy: -1 };
+  }
+  if (portKind === "sig_in" && (n.type === "compressor" || SM.isHxType(n.type))) {
+    return { x: n.x + 22, y: n.y + 6, dx: 0, dy: -1 };
+  }
+  const p = getPortLocal(n.rot, isOut, portKind);
+  return { x: n.x + p.x, y: n.y + p.y, dx: p.dx, dy: p.dy };
+}
+function cleanupTempWire() { if (tempWireEl) { tempWireEl.remove(); tempWireEl = null; } connectingFrom = null; connectingKind = "flow"; }
+
+window.addEventListener("mousemove", e => {
+  if (!dragMode) return;
+  if (dragMode === "panCanvas") { viewPanX = e.clientX - dragStart.x; viewPanY = e.clientY - dragStart.y; applyCanvasTransform(); return; }
+  if (dragMode === "nodes") {
+    const pt = clientToCanvas(e.clientX, e.clientY), dx = pt.x - dragStart.x, dy = pt.y - dragStart.y;
+    nodes.forEach(n => { if (initialNodePos.has(n.id)) { const init = initialNodePos.get(n.id); n.x = Math.max(8, init.x + dx); n.y = Math.max(8, init.y + dy); const el = nodeLayer.querySelector(`.node[data-id="${n.id}"]`); if (el) { el.style.left = n.x + "px"; el.style.top = n.y + "px"; } } });
+    renderWires();
+  } else if (dragMode === "marquee") {
+    const r = canvasWrap.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top;
+    selectBox.style.left = Math.min(dragStart.x, mx) + "px"; selectBox.style.top = Math.min(dragStart.y, my) + "px";
+    selectBox.style.width = Math.abs(mx - dragStart.x) + "px"; selectBox.style.height = Math.abs(my - dragStart.y) + "px";
+  } else if (dragMode === "wire" && tempWireEl) {
+    const pKind = connectingKind === "signal" ? "sig_out" : (connectingKind === "air" ? "air" : "flow");
+    const p1 = getPortGlobal(connectingFrom, true, pKind), pt = clientToCanvas(e.clientX, e.clientY);
+    tempWireEl.setAttribute("d", buildOrthoPipe(p1, { x: pt.x, y: pt.y, dx: -p1.dx, dy: -p1.dy }).d);
+  }
+});
+window.addEventListener("mouseup", () => {
+  if (dragMode === "marquee") {
+    const bx = (parseFloat(selectBox.style.left) - viewPanX) / viewZoom, by = (parseFloat(selectBox.style.top) - viewPanY) / viewZoom;
+    const bw = parseFloat(selectBox.style.width) / viewZoom, bh = parseFloat(selectBox.style.height) / viewZoom;
+    if (bw > 4 || bh > 4) nodes.forEach(n => { const c = isCompactNode(n.type) ? 32 : 50; if (n.x + c >= bx && n.x + c <= bx + bw && n.y + c >= by && n.y + c <= by + bh) selectedNodeIds.add(n.id); });
+    selectBox.style.display = "none"; document.querySelectorAll(".node").forEach(nd => nd.classList.toggle("selected", selectedNodeIds.has(nd.dataset.id))); renderInspector();
+  }
+  cleanupTempWire(); dragMode = null;
+});
+
+// ================= 공용 지오메트리 필드 & 우측 속성창(스케치) / 결과창(솔버) =================
+function hxGeoFieldsHTML(p, prefix) {
+  if (p.hxType === "plate") {
+    return `<div class="field"><div class="field-row"><label>플레이트 W / L [mm]</label><div style="display:flex;gap:4px;"><input type="number" id="${prefix}PW" value="${p.plate_W_mm}" step="5" style="width:54px;"><input type="number" id="${prefix}PL" value="${p.plate_L_mm}" step="10" style="width:54px;"></div></div></div>
+      <div class="field"><div class="field-row"><label>쉐브론 β [°] / 주름 b [mm]</label><div style="display:flex;gap:4px;"><input type="number" id="${prefix}Beta" value="${p.chevron_deg}" step="5" style="width:54px;"><input type="number" id="${prefix}CorrD" value="${p.corr_depth_mm}" step="0.2" style="width:54px;"></div></div></div>
+      <div class="field"><div class="field-row"><label>주름 피치 p_co [mm] / Φ</label><div style="display:flex;gap:4px;"><input type="number" id="${prefix}Pco" value="${p.corr_pitch_mm||7}" step="0.5" style="width:54px;"><input type="number" id="${prefix}Phi" value="${p.phi_enlarge||1.17}" step="0.02" style="width:54px;"></div></div></div>
+      <div class="field"><div class="field-row"><label>플레이트 매수 Np</label><input type="number" id="${prefix}Np" value="${p.n_plates}" step="2" min="4"></div></div>
+      <div class="field"><div class="field-row"><label>두께 tp [mm] / k [W/mK]</label><div style="display:flex;gap:4px;"><input type="number" id="${prefix}Tp" value="${p.plate_thick_mm}" step="0.1" style="width:54px;"><input type="number" id="${prefix}Kp" value="${p.plate_k_WmK}" step="2" style="width:54px;"></div></div></div>`;
+  }
+  return `<div class="field"><div class="field-row"><label>코어 W / H / D [mm]</label><div style="display:flex;gap:3px;"><input type="number" id="${prefix}CW" value="${p.core_W_mm}" step="20" style="width:48px;"><input type="number" id="${prefix}CH" value="${p.core_H_mm}" step="20" style="width:48px;"><input type="number" id="${prefix}CD" value="${p.core_D_mm}" step="2" style="width:42px;"></div></div></div>
+    <div class="field"><div class="field-row"><label>핀 피치 Fp / 두께 ft [mm]</label><div style="display:flex;gap:4px;"><input type="number" id="${prefix}Fp" value="${p.fin_pitch_mm}" step="0.2" style="width:54px;"><input type="number" id="${prefix}Ft" value="${p.fin_thick_mm}" step="0.02" style="width:54px;"></div></div></div>
+    <div class="field"><div class="field-row"><label>냉매 Dh [mm] / 채널 / 패스</label><div style="display:flex;gap:3px;"><input type="number" id="${prefix}ChDh" value="${p.ch_Dh_mm}" step="0.2" style="width:44px;"><input type="number" id="${prefix}Nch" value="${p.n_channels}" step="2" style="width:44px;"><input type="number" id="${prefix}Npass" value="${p.n_passes}" step="1" style="width:38px;"></div></div></div>`;
+}
+function hxMethodFieldsHTML(p, prefix) {
+  if (p.method === "GEO") return "";
+  if (p.method === "NTU") return `<div class="field"><div class="field-row"><label>NTU 값</label><input type="number" id="${prefix}NTU" value="${p.NTU_val}" step="0.1"></div></div>`;
+  return `<div class="field"><div class="field-row"><label>열교환 성능 UA [kW/K]</label><input type="number" id="${prefix}UA" value="${p.UA_kWK}" step="0.05"></div></div>`;
+}
+function bindHxGeoAndMethodInputs(targetObj, prefix, onChange, rootEl = document) {
+  const findEl = id => (rootEl && rootEl.querySelector) ? rootEl.querySelector("#" + id) : document.getElementById(id);
+  [["PW","plate_W_mm"],["PL","plate_L_mm"],["Beta","chevron_deg"],["CorrD","corr_depth_mm"],["Pco","corr_pitch_mm"],["Phi","phi_enlarge"],["Np","n_plates"],["Tp","plate_thick_mm"],["Kp","plate_k_WmK"],
+   ["CW","core_W_mm"],["CH","core_H_mm"],["CD","core_D_mm"],["Fp","fin_pitch_mm"],["Ft","fin_thick_mm"],["ChDh","ch_Dh_mm"],["Nch","n_channels"],["Npass","n_passes"],
+   ["UA","UA_kWK"],["NTU","NTU_val"]].forEach(([sfx, key]) => {
+    const el = findEl(prefix + sfx);
+    if (el) el.oninput = e => { targetObj[key] = +e.target.value; onChange(); };
+  });
+}
+
+const inspectorBody = document.getElementById("inspectorBody");
+const sysSummaryBody = document.getElementById("sysSummaryBody");
+const originPlotWin = document.getElementById("originPlotWin");
+const originCanvas = document.getElementById("originCanvas");
+const canvasDropHint = document.getElementById("canvasDropHint");
+let originSeriesList = [], draggingOriginWin = false, originWinOff = { x: 0, y: 0 };
+
+// 드래그 가능한 한 줄 결과 항목 헬퍼
+function resLineHTML(label, valStr, dragKey = "", color = "") {
+  const dragAttr = dragKey ? `draggable="true" data-dragkey="${dragKey}" data-draglabel="${label}" title="통합 캔버스로 드래그하면 시간에 따른 Origin 그래프가 그려집니다!"` : "";
+  const badge = dragKey ? `<span class="drag-hint-badge">⤡ 그래프 드래그</span>` : "";
+  return `<div class="res-line" ${dragAttr}>
+    <span class="r-lbl">${label} ${badge}</span>
+    <span class="r-val" style="${color?`color:${color}`:''}">${valStr}</span>
+  </div>`;
+}
+
+function updateSysSummaryPanel() {
+  if (!sysSummaryBody) return;
+  const comp = nodes.find(n => n.type === "compressor" && n.result);
+  const evap = nodes.find(n => SM.isHxType(n.type) && n.result && !n.result.metrics.isCondenser);
+  const cond = nodes.find(n => SM.isHxType(n.type) && n.result && n.result.metrics.isCondenser);
+  const cop = (comp && evap && comp.result.metrics.W_shaft_kW > 0) ? (evap.result.metrics.Q_kW / comp.result.metrics.W_shaft_kW) : 0;
+  const chG = lastConvergence && lastConvergence.conservation ? lastConvergence.conservation.mass.total_g : 0;
+  sysSummaryBody.innerHTML =
+    resLineHTML("시스템 성적계수 COP", cop > 0 ? cop.toFixed(2) : "-", "sys:COP", "#15803d") +
+    resLineHTML("총 냉매 충전량", `${chG.toFixed(0)} g`, "sys:charge_g") +
+    resLineHTML("증발 냉동능력 Q_evap", evap ? `${evap.result.metrics.Q_kW.toFixed(2)} kW` : "-", "sys:Q_evap", "#0284c7") +
+    resLineHTML("응축 방열량 Q_cond", cond ? `${cond.result.metrics.Q_kW.toFixed(2)} kW` : "-", "sys:Q_cond", "#16a34a") +
+    resLineHTML("압축기 축동력 W_shaft", comp ? `${comp.result.metrics.W_shaft_kW.toFixed(2)} kW` : "-", "sys:W_shaft", "var(--warn)");
+  bindResultLineDragEvents(sysSummaryBody);
+}
+
+function renderInspector() {
+  updateSysSummaryPanel();
+  const maybeRun = () => {
+    if (appMode === "solver") runSimulation(false);
+    else { renderNodes(); renderWires(); renderChromeTabs(); }
+    if (originSeriesList.length > 0) recomputeAndDrawOriginPlot();
+  };
+
+  // 배관 선택 시 (솔버모드: 한 줄씩 큼직하게 배관 물성 결과 상세 출력 / 스케치모드: 삭제 버튼)
+  if (selectedEdgeId) {
+    const ed = edges.find(e => e.id === selectedEdgeId);
+    if (ed) {
+      const a = nodes.find(n => n.id === ed.from), b = nodes.find(n => n.id === ed.to);
+      const st = ed.stream;
+      const eKind = ed.kind || "flow";
+      inspectorBody.innerHTML = `<h2><span>🔗 ${eKind==='signal'?'신호선':(eKind==='air'?'공기 풍량 배관':'냉매 배관')} (${a?a.modelName:""} → ${b?b.modelName:""})</span><button class="sm danger" id="delEdgeBtn">삭제</button></h2>
+        ${appMode === "solver" && st ? `<div class="res-box"><h3>배관 유체 상태량 결과 <span style="font-size:10.5px;color:var(--muted);font-weight:600;">(캔버스로 드래그 → 시계열 그래프)</span></h3>
+          ${resLineHTML("압력 P", `${st.P_bar.toFixed(3)} bar`, `edge:${ed.id}:P_bar`)}
+          ${resLineHTML("유체 온도 T", `${st.T_C.toFixed(2)} °C`, `edge:${ed.id}:T_C`, CV.tempToCFDColor(st.T_C))}
+          ${resLineHTML("포화온도 T_sat", `${(st.T_sat_C??0).toFixed(2)} °C`, `edge:${ed.id}:T_sat_C`)}
+          ${resLineHTML("건도 Quality (x)", `${(st.quality??1).toFixed(3)}`, `edge:${ed.id}:quality`)}
+          ${resLineHTML("비엔탈피 h", `${st.h_kJkg.toFixed(2)} kJ/kg`, `edge:${ed.id}:h_kJkg`)}
+          ${resLineHTML("비엔트로피 s", `${(st.s_kJkgK||0).toFixed(4)} kJ/kg·K`, `edge:${ed.id}:s_kJkgK`)}
+          ${resLineHTML("밀도 ρ", `${(st.rho||0).toFixed(2)} kg/m³`, `edge:${ed.id}:rho`)}
+          ${resLineHTML("질량유량 m_dot", `${st.m_dot.toFixed(4)} kg/s`, `edge:${ed.id}:m_dot`, "var(--accent)")}
+          ${resLineHTML("점성계수 μ", `${(st.mu||0).toFixed(1)} μPa·s`)}
+          ${resLineHTML("열전도도 k / 정압비열 Cp", `${(st.k||0).toFixed(1)} mW/m·K  |  ${(st.Cp||0).toFixed(3)} kJ/kg·K`)}
+          ${resLineHTML("배관 마찰 압력손실 ΔP", `${(st.pipe_dP_bar||0).toFixed(4)} bar`, `edge:${ed.id}:pipe_dP_bar`)}
+          ${resLineHTML("배관 내부 냉매 보유량", `${((st.pipe_mass_kg||0)*1000).toFixed(1)} g`)}
+        </div>` : `<div style="font-size:12.5px;color:var(--muted);margin-top:10px;line-height:1.6;">${eKind==='signal'?'신호 연결선입니다. 삭제하려면 [삭제] 버튼 또는 Delete 키를 누르세요.':(eKind==='air'?'팬과 핀-플레이트 열교환기 사이의 공기 유동 연결선입니다.':'스케치 모드입니다. <b>▶ 실행 (솔버 모드)</b>을 누른 뒤 배관을 클릭하면 항목별로 구분된 상세 결과가 표시됩니다.')}</div>`}`;
+      document.getElementById("delEdgeBtn").onclick = () => { edges = edges.filter(x => x.id !== ed.id); selectedEdgeId = null; maybeRun(); renderInspector(); };
+      bindResultLineDragEvents(inspectorBody);
+      return;
+    }
+  }
+
+  if (selectedNodeIds.size !== 1) {
+    inspectorBody.innerHTML = `<h2>${appMode==='solver'?'컴포넌트 / 배관 상세 결과':'간이 속성 편집기'}</h2><div style="font-size:13px;color:var(--muted);margin-top:14px;text-align:center;line-height:1.65;">${appMode==='solver'?'배관이나 컴포넌트를 클릭하면 각 결과 항목이 한 줄씩 선명하게 표시됩니다.<br><b style="color:var(--accent);">결과 항목을 중앙 캔버스로 드래그하면 시간에 따른 Origin 그래프가 열립니다!</b>':'컴포넌트를 클릭해 속성을 편집하거나<br>더블클릭으로 상세 설계 탭을 여세요.'}</div>`;
+    return;
+  }
+
+  const n = nodes.find(x => x.id === [...selectedNodeIds][0]); if (!n) return;
+  const refNodes = nodes.filter(x => x.type === "refrigerant");
+  const hdrBtns = `<span style="display:flex;gap:4px;">${!SM.isSignalType(n.type)?`<button id="openDetailTabBtn" class="sm primary">🔍 상세 탭</button>`:""}${SM.isFlowNode(n.type)?`<button id="rotBtn" class="sm">↻ 90°</button>`:""}</span>`;
+  const fluidBindHTML = SM.isFlowNode(n.type)
+    ? `<div class="field"><div class="field-row"><label>연결 냉매 노드</label><select id="insFluidNode" style="width:148px;">${refNodes.length ? refNodes.map(r => `<option value="${r.id}" ${n.params.fluidNodeId===r.id?"selected":""}>${r.modelName} (${r.params.fluid})</option>`).join("") : `<option value="">(없음)</option>`}</select></div></div>` : "";
+  const isRes = appMode === "solver" && n.result;
+
+  if (SM.isSignalType(n.type)) {
+    const p = n.params;
+    const tNow = getSimConfig().t_sec;
+    const outNow = SM.evalSignalNode(n, tNow);
+    const connEdges = edges.filter(e => e.from === n.id && e.kind === "signal");
+    const connNames = connEdges.map(e => { const t = nodes.find(x => x.id === e.to); return t ? t.modelName : ""; }).filter(Boolean);
+    inspectorBody.innerHTML = `<h2><span>⚡ ${n.modelName} (탭 생략)</span></h2>
+      <div style="font-size:11.5px;color:var(--muted);margin-bottom:8px;line-height:1.55;">신호 컴포넌트는 우측의 <b>주황색 출력 포트</b>에서 열교환기·압축기·팬으로 <b>직접 선을 끌어 연결</b>해야 작동합니다.</div>
+      <div class="field"><div class="field-row"><label>선 연결 상태</label><b style="color:${connNames.length?'#15803d':'var(--danger)'}">${connNames.length ? connNames.join(", ") : "⚠️ 미연결 (선 연결 필수)"}</b></div></div>
+      ${n.type === "sig_const"
+        ? `<div class="field"><div class="field-row"><label>상수 출력값 (Q 또는 RPM)</label><input type="number" id="insSigVal" value="${p.value??-5.5}" step="0.5"></div></div>`
+        : n.type === "sig_step"
+          ? `<div class="field"><div class="field-row"><label>초기값 y_0</label><input type="number" id="insStep0" value="${p.val_init??2400}" step="50"></div></div>
+             <div class="field"><div class="field-row"><label>최종값 y_1</label><input type="number" id="insStep1" value="${p.val_final??3600}" step="50"></div></div>
+             <div class="field"><div class="field-row"><label>스텝 시각 t_step [s]</label><input type="number" id="insStepT" value="${p.t_step??10}" step="1"></div></div>`
+          : `<div class="field"><label style="font-size:11px;color:var(--muted);">시나리오 테이블 (t [s], 출력값)</label><textarea id="insScenCsv" style="height:95px;">${p.scenario_csv||"0, 2200\n10, 3200\n20, 4200\n30, 2800"}</textarea></div>`}
+      <div class="res-box"><h3>신호 출력 결과 (t = ${tNow} s)</h3>
+        ${resLineHTML("현재 신호 출력 y(t)", `${Number(outNow.toFixed(3))}`, `node:${n.id}:sig_val`, "#d97706")}
+      </div>`;
+    const sv = document.getElementById("insSigVal"); if (sv) sv.oninput = e => { p.value = +e.target.value; maybeRun(); renderInspector(); };
+    const s0 = document.getElementById("insStep0"); if (s0) s0.oninput = e => { p.val_init = +e.target.value; maybeRun(); renderInspector(); };
+    const s1 = document.getElementById("insStep1"); if (s1) s1.oninput = e => { p.val_final = +e.target.value; maybeRun(); renderInspector(); };
+    const st = document.getElementById("insStepT"); if (st) st.oninput = e => { p.t_step = +e.target.value; maybeRun(); renderInspector(); };
+    const sc = document.getElementById("insScenCsv"); if (sc) sc.oninput = e => { p.scenario_csv = e.target.value; maybeRun(); };
+    bindResultLineDragEvents(inspectorBody);
+    return;
+  }
+
+  if (n.type === "fan") {
+    const p = n.params;
+    const airEdge = edges.find(e => (e.from === n.id || e.to === n.id) && e.kind === "air");
+    const linkedHx = airEdge ? nodes.find(h => (h.id === airEdge.from || h.id === airEdge.to) && SM.isHxType(h.type)) : null;
+    const connSig = SM.findConnectedSignal(n, nodes, edges);
+    inspectorBody.innerHTML = `<h2><span>🌀 ${n.modelName}</span>${hdrBtns}</h2>
+      <div class="field"><div class="field-row"><label>핀-플레이트 직결 상태</label><b style="color:${linkedHx?'#0891b2':'var(--danger)'}">${linkedHx ? `🌡️ ${linkedHx.modelName}` : "⚠️ 공기포트 선 연결 필수"}</b></div></div>
+      <div class="field"><div class="field-row"><label>RPM 신호선 연결</label><b style="color:${connSig?'#d97706':'var(--muted)'}">${connSig ? `⚡ ${connSig.modelName}` : "(미연결)"}</b></div></div>
+      <label class="chk-line"><input type="checkbox" id="insFanGlob" ${p.link_global!==false?'checked':''}/> 전역 팬 RPM 연동</label>
+      <div class="field"><div class="field-row"><label>운전 회전수 [RPM]</label><input type="number" id="insFanRpm" value="${p.rpm||1800}" step="100" ${(p.link_global!==false||connSig)?'disabled':''}></div></div>
+      <div class="field"><div class="field-row"><label>곡선 기준 RPM_ref</label><input type="number" id="insFanRef" value="${p.rpm_ref||1800}" step="100"></div></div>
+      <div class="field"><label style="font-size:11px;color:var(--accent);font-weight:700;">펌프/팬 P-Q 성능곡선 CSV [필수: Q_CMM, dP_Pa, eff]</label><textarea id="insFanCsv" style="height:85px;">${p.curve_csv||""}</textarea></div>
+      ${isRes && n.result.metrics ? `<div class="res-box"><h3>팬 운전점 결과 (P-Q 교점)</h3>
+        ${resLineHTML("작동 체적풍량 Q_air", `${n.result.metrics.Q_op_m3min.toFixed(2)} m³/min`, `node:${n.id}:Q_op_m3min`, "#0891b2")}
+        ${resLineHTML("공기 질량유량 m_air", `${n.result.metrics.m_air_kgs.toFixed(3)} kg/s`, `node:${n.id}:m_air_kgs`, "var(--accent)")}
+        ${resLineHTML("작동 정압 ΔP_fan", `${n.result.metrics.dP_op_Pa.toFixed(1)} Pa`, `node:${n.id}:dP_op_Pa`)}
+        ${resLineHTML("팬 효율 η_fan", `${(n.result.metrics.eff_op*100).toFixed(1)} %`, `node:${n.id}:eff_pct`, "var(--green)")}
+        ${resLineHTML("팬 소비동력 W_fan", `${(n.result.metrics.W_fan_kW*1000).toFixed(1)} W`, `node:${n.id}:W_fan_W`, "var(--warn)")}
+      </div>` : ""}`;
+    document.getElementById("insFanGlob").onchange = e => { p.link_global = e.target.checked; maybeRun(); renderInspector(); };
+    document.getElementById("insFanRpm").oninput = e => { p.rpm = +e.target.value || 1800; maybeRun(); };
+    document.getElementById("insFanRef").oninput = e => { p.rpm_ref = +e.target.value || 1800; maybeRun(); };
+    document.getElementById("insFanCsv").oninput = e => { p.curve_csv = e.target.value; maybeRun(); };
+    document.getElementById("openDetailTabBtn").onclick = () => switchTab(n.id);
+    bindResultLineDragEvents(inspectorBody);
+    return;
+  }
+
+  if (n.type === "solver") {
+    const p = n.params;
+    inspectorBody.innerHTML = `<h2><span>${n.modelName}</span>${hdrBtns}</h2>
+      <div class="field"><div class="field-row"><label>수치해석 기법</label><select id="insSvNum"><option value="newton_secant" ${p.num_method==='newton_secant'?'selected':''}>준-뉴턴/할선</option><option value="fixed_point" ${p.num_method==='fixed_point'?'selected':''}>고정점 완화</option><option value="aitken" ${p.num_method==='aitken'?'selected':''}>Aitken Δ²</option></select></div></div>
+      <div class="field"><div class="field-row"><label>완화계수 α / maxIter</label><div style="display:flex;gap:4px;"><input type="number" id="insSvAlpha" value="${p.alpha}" step="0.05" style="width:54px;"><input type="number" id="insSvIter" value="${p.maxIter}" step="5" style="width:54px;"></div></div></div>`;
+    document.getElementById("insSvNum").onchange = e => { p.num_method = e.target.value; syncSolverDockFromNode(); maybeRun(); };
+    document.getElementById("insSvAlpha").oninput = e => { p.alpha = +e.target.value || 0.45; maybeRun(); };
+    document.getElementById("insSvIter").oninput = e => { p.maxIter = +e.target.value || 50; maybeRun(); };
+
+  } else if (n.type === "refrigerant") {
+    const p = n.params, allFluids = Object.keys(fluidTableDB);
+    const isTwoPh = fluidTableDB[p.fluid] && fluidTableDB[p.fluid].kind === "two_phase";
+    inspectorBody.innerHTML = `<h2><span>${n.modelName}</span>${hdrBtns}</h2>
+      <div class="field"><div class="field-row"><label>정의할 유체 (냉매/2차유체)</label><select id="insRefFluid" style="width:135px;">${allFluids.map(k => `<option value="${k}" ${k===p.fluid?'selected':''}>${k}</option>`).join("")}</select></div></div>
+      ${isTwoPh ? `<div class="field"><div class="field-row"><label>충전량 방식</label><select id="insChMode" style="width:135px;"><option value="auto" ${p.charge_mode==='auto'?'selected':''}>자동 계산</option><option value="manual" ${p.charge_mode!=='auto'?'selected':''}>수동 입력</option></select></div></div>
+      ${p.charge_mode === "auto"
+        ? `<div class="field"><div class="field-row"><label>목표 탱크 액위 [%]</label><input type="number" id="insAutoLv" value="${p.auto_rec_level_pct??40}" step="5"></div></div>`
+        : `<div class="field"><div class="field-row"><label>수동 충전량 [g]</label><input type="number" id="insChG" value="${p.charge_g??650}" step="25"></div></div>`}`
+      : `<div style="font-size:11.5px;color:var(--green);margin-top:6px;">✔ 열교환기 상대측 단상 유체(<b>${p.fluid}</b>) 물성치가 활성화되었습니다.</div>`}`;
+    document.getElementById("insRefFluid").onchange = e => { p.fluid = e.target.value; p.editFluid = e.target.value; computeAutoPlotView(); maybeRun(); renderInspector(); };
+    const cm = document.getElementById("insChMode"); if (cm) cm.onchange = e => { p.charge_mode = e.target.value; maybeRun(); renderInspector(); };
+    const lv = document.getElementById("insAutoLv"); if (lv) lv.oninput = e => { p.auto_rec_level_pct = +e.target.value || 40; maybeRun(); };
+    const cg = document.getElementById("insChG"); if (cg) cg.oninput = e => { p.charge_g = +e.target.value || 650; maybeRun(); };
+
+  } else if (SM.isSensorType(n.type)) {
+    const p = n.params, flowEdges = edges.filter(e => !e.kind || e.kind === "flow");
+    const edgeLbl = e => { const a = nodes.find(x => x.id === e.from), b = nodes.find(x => x.id === e.to); return `${a?a.modelName:""}→${b?b.modelName:""}`; };
+    inspectorBody.innerHTML = `<h2><span>${n.modelName}</span>${hdrBtns}</h2>
+      <div class="field"><div class="field-row"><label>측정 배관</label><select id="insSMedge" style="width:165px;"><option value="">(선택)</option>${flowEdges.map(e => `<option value="${e.id}" ${p.measureEdgeId===e.id?'selected':''}>${edgeLbl(e)}</option>`).join("")}</select></div></div>
+      ${isRes && n.result.connected ? `<div class="res-box"><h3>센서 계측 결과</h3>
+        ${resLineHTML("계측 압력 P", `${n.result.P_bar.toFixed(2)} bar`, `node:${n.id}:P_bar`)}
+        ${resLineHTML("계측 온도 T", `${n.result.T_C.toFixed(2)} °C`, `node:${n.id}:T_C`, "var(--hot)")}
+        ${resLineHTML("포화온도 T_sat", `${n.result.T_sat_C.toFixed(2)} °C`, `node:${n.id}:T_sat_C`)}
+        ${resLineHTML("계측 과열도 SH", `${n.result.SH.toFixed(2)} K`, `node:${n.id}:SH`, "var(--green)")}
+      </div>` : ""}`;
+    document.getElementById("insSMedge").onchange = e => { p.measureEdgeId = e.target.value; maybeRun(); };
+
+  } else if (n.type === "compressor") {
+    const connSig = SM.findConnectedSignal(n, nodes, edges);
+    inspectorBody.innerHTML = `<h2><span>${n.modelName}</span>${hdrBtns}</h2>${fluidBindHTML}
+      <div class="field"><div class="field-row"><label>RPM 신호선 연결</label><b style="color:${connSig?'#d97706':'var(--muted)'}">${connSig ? `⚡ ${connSig.modelName}` : "(미연결)"}</b></div></div>
+      <label class="chk-line"><input type="checkbox" id="insLinkGlobal" ${n.params.link_global!==false?'checked':''}/> 전역 압축기 RPM 연동</label>
+      <div class="field"><div class="field-row"><label>배기량 Vd [cc/rev]</label><input type="number" id="insVd" value="${n.params.vd_cc}" step="5"></div></div>
+      <div class="field"><div class="field-row"><label>개별 회전수 [RPM]</label><input type="number" id="insRpm" value="${n.params.rpm}" step="100" ${(n.params.link_global!==false||connSig)?'disabled':''}></div></div>
+      ${isRes ? `<div class="res-box"><h3>압축기 계산 결과</h3>
+        ${resLineHTML("흡입 압력 P1 / 온도 T1", `${n.result.inlet.P_bar.toFixed(2)} bar  |  ${n.result.inlet.T_C.toFixed(1)} °C`, `node:${n.id}:P1_bar`)}
+        ${resLineHTML("토출 압력 P2", `${n.result.outlet.P_bar.toFixed(2)} bar`, `node:${n.id}:P2_bar`, "var(--accent)")}
+        ${resLineHTML("토출 온도 T2", `${n.result.outlet.T_C.toFixed(1)} °C`, `node:${n.id}:T2_C`, "var(--hot)")}
+        ${resLineHTML("압력비 PR", `${n.result.metrics.PR.toFixed(2)}`, `node:${n.id}:PR`)}
+        ${resLineHTML("냉매 질량유량 m_dot", `${n.result.outlet.m_dot.toFixed(4)} kg/s`, `node:${n.id}:m_dot`, "var(--green)")}
+        ${resLineHTML("압축기 축동력 W_shaft", `${n.result.metrics.W_shaft_kW.toFixed(2)} kW`, `node:${n.id}:W_shaft_kW`, "var(--warn)")}
+        ${resLineHTML("등엔트로피 / 체적 효율", `η_is ${(n.result.metrics.eff_is*100).toFixed(1)}%  |  η_v ${(n.result.metrics.eff_vol*100).toFixed(1)}%`, `node:${n.id}:eff_is`)}
+      </div>` : ""}`;
+    document.getElementById("insLinkGlobal").onchange = e => { n.params.link_global = e.target.checked; maybeRun(); renderInspector(); };
+    document.getElementById("insVd").oninput = e => { n.params.vd_cc = +e.target.value; maybeRun(); };
+    document.getElementById("insRpm").oninput = e => { n.params.rpm = +e.target.value; maybeRun(); };
+
+  } else if (SM.isHxType(n.type)) {
+    const p = n.params;
+    const connSig = SM.findConnectedSignal(n, nodes, edges);
+    const connFan = SM.findConnectedFan(n, nodes, edges);
+    inspectorBody.innerHTML = `<h2><span>${n.modelName}</span>${hdrBtns}</h2>${fluidBindHTML}
+      <div class="field"><div class="field-row"><label>열원 경계 모드</label><select id="insSecMode" style="width:155px;"><option value="fluid_temp" ${p.sec_mode!=='const_Q'?'selected':''}>유체 입구온도·유량</option><option value="const_Q" ${p.sec_mode==='const_Q'?'selected':''}>고정 열부하 (신호선 필수)</option></select></div></div>
+      ${p.sec_mode === "const_Q"
+        ? `<div class="field"><div class="field-row"><label style="color:#d97706;font-weight:700;">열부하 신호선</label><b style="color:${connSig?'#15803d':'var(--danger)'}">${connSig ? `⚡ ${connSig.modelName} (${SM.evalSignalNode(connSig, getSimConfig().t_sec).toFixed(2)} kW)` : "⚠️ 신호선 미연결"}</b></div></div>`
+        : `<div class="field"><div class="field-row"><label>상대측 유체</label><select id="insSecFluid"><option value="Air" ${p.sec_fluid==='Air'?'selected':''}>Air</option><option value="Water" ${p.sec_fluid==='Water'?'selected':''}>Water</option><option value="GW" ${p.sec_fluid==='GW'?'selected':''}>GW</option></select></div></div>
+           ${n.type === "hx_fin_plate" ? `<div class="field"><div class="field-row"><label>공기포트 직결 팬</label><b style="color:${connFan?'#0891b2':'var(--danger)'}">${connFan ? `🌀 ${connFan.modelName}` : "⚠️ 공기포트에 팬 연결 필수"}</b></div></div>` : ""}
+           <label class="chk-line"><input type="checkbox" id="insLinkAmb" ${p.link_ambient?'checked':''}/> 전역 외기온도 연동</label>
+           <div class="field"><div class="field-row"><label>상대측 입구 온도 [°C]</label><input type="number" id="insTsec" value="${p.T_sec_in}" step="0.5" ${p.link_ambient?'disabled':''}></div></div>
+           <div class="field"><div class="field-row"><label>상대측 유량 [kg/s]</label><input type="number" id="insMsec" value="${p.m_sec_kgs}" step="0.05" ${n.type==='hx_fin_plate'?'disabled':''}></div></div>`}
+      ${hxGeoFieldsHTML(p, "ins")}
+      ${isRes ? `<div class="res-box"><h3>열교환기 결과 (${n.result.metrics.role})</h3>
+        ${resLineHTML("열교환량 Q", `${n.result.metrics.Q_kW.toFixed(2)} kW`, `node:${n.id}:Q_kW`, "var(--accent)")}
+        ${resLineHTML("총괄 열전달 성능 UA", `${n.result.metrics.UA_eff.toFixed(2)} kW/K`, `node:${n.id}:UA_eff`)}
+        ${resLineHTML("냉매측 열전달계수 h_ref", `${n.result.metrics.h_ref_Wm2K.toFixed(0)} W/m²·K`, `node:${n.id}:h_ref`, "var(--green)")}
+        ${resLineHTML("상대측 열전달계수 h_sec", `${n.result.metrics.h_sec_Wm2K.toFixed(0)} W/m²·K`, `node:${n.id}:h_sec`)}
+        ${resLineHTML("냉매 출구 온도 T_out", `${n.result.outlet.T_C.toFixed(1)} °C (${n.result.metrics.phase})`, `node:${n.id}:T_out_C`, "var(--hot)")}
+        ${resLineHTML("상대측 유체 출구 온도", `${n.result.metrics.T_sec_out.toFixed(1)} °C`, `node:${n.id}:T_sec_out`)}
+        ${resLineHTML("냉매 압력강하 ΔP", `${n.result.metrics.dP_bar.toFixed(3)} bar`, `node:${n.id}:dP_bar`)}
+        ${resLineHTML("내부 냉매 보유량", `${(n.result.metrics.mass_kg*1000).toFixed(0)} g (${n.result.metrics.V_int_L.toFixed(2)} L)`, `node:${n.id}:mass_g`, "var(--purple)")}
+      </div>` : ""}`;
+    document.getElementById("insSecMode").onchange = e => { p.sec_mode = e.target.value; maybeRun(); renderInspector(); };
+    const sf = document.getElementById("insSecFluid"); if (sf) sf.onchange = e => { p.sec_fluid = e.target.value; maybeRun(); };
+    const la = document.getElementById("insLinkAmb"); if (la) la.onchange = e => { p.link_ambient = e.target.checked; maybeRun(); renderInspector(); };
+    const ts = document.getElementById("insTsec"); if (ts) ts.oninput = e => { p.T_sec_in = +e.target.value; maybeRun(); };
+    const ms = document.getElementById("insMsec"); if (ms) ms.oninput = e => { const v = +e.target.value; p.m_sec_kgs = v; p.m_sec_ref = v; maybeRun(); };
+    bindHxGeoAndMethodInputs(p, "ins", maybeRun, inspectorBody);
+
+  } else if (n.type === "receiver") {
+    const p = n.params, volL = RM.calcVolumeL(p);
+    inspectorBody.innerHTML = `<h2><span>${n.modelName}</span>${hdrBtns}</h2>${fluidBindHTML}
+      <div class="field"><div class="field-row"><label>탱크 종류</label><select id="insRecType"><option value="suction" ${p.rec_type!=='high_pressure'?'selected':''}>저압 어큐뮬레이터</option><option value="high_pressure" ${p.rec_type==='high_pressure'?'selected':''}>고압 액 리시버</option></select></div></div>
+      <div class="field"><div class="field-row"><label>지름 D / 높이 H [mm]</label><div style="display:flex;gap:4px;"><input type="number" id="insRD" value="${p.diam_mm||90}" step="5" style="width:54px;"><input type="number" id="insRH" value="${p.height_mm||200}" step="10" style="width:54px;"></div></div></div>
+      <div class="field"><div class="field-row"><label>계산 체적 V</label><b style="color:var(--accent);">${volL.toFixed(3)} L</b></div></div>
+      ${isRes ? `<div class="res-box"><h3>탱크 결과 (${n.result.metrics.role})</h3>
+        ${resLineHTML("탱크 액위 Level", `${n.result.metrics.level_pct.toFixed(1)} %`, `node:${n.id}:level_pct`, "var(--accent)")}
+        ${resLineHTML("운전 상태", `${n.result.metrics.state_desc}`)}
+        ${resLineHTML("보유 냉매 질량", `${(n.result.metrics.mass_kg*1000).toFixed(0)} g`, `node:${n.id}:mass_g`, "var(--green)")}
+        ${resLineHTML("출구 압력 / 온도", `${n.result.outlet.P_bar.toFixed(2)} bar  |  ${n.result.outlet.T_C.toFixed(1)} °C`, `node:${n.id}:T_out_C`)}
+        ${resLineHTML("압력손실 ΔP", `${n.result.metrics.dP_bar.toFixed(3)} bar`, `node:${n.id}:dP_bar`)}
+      </div>` : ""}`;
+    document.getElementById("insRecType").onchange = e => { p.rec_type = e.target.value; maybeRun(); };
+    document.getElementById("insRD").oninput = e => { p.diam_mm = +e.target.value || 90; maybeRun(); };
+    document.getElementById("insRH").oninput = e => { p.height_mm = +e.target.value || 200; maybeRun(); };
+
+  } else {
+    const p = n.params, sensors = nodes.filter(x => SM.isSensorType(x.type));
+    const D_mm = p.orifice_D_mm || 2.2, A_max = (Math.PI * D_mm * D_mm) / 4;
+    const fc = p.flow_corr || "re_diam_cd";
+    const cdShow = n.result && n.result.metrics ? n.result.metrics.Cd_eff : VM.calcEffectiveCd(p, D_mm, 1150, 150, 0.035, A_max * 0.5e-6, 5.0);
+    inspectorBody.innerHTML = `<h2><span>${n.modelName}</span>${hdrBtns}</h2>${fluidBindHTML}
+      <div class="field"><div class="field-row"><label>제어 모드</label><select id="insVMode"><option value="txv_sh" ${p.valve_mode==='txv_sh'?'selected':''}>TXV 과열도(센서)</option><option value="orifice" ${p.valve_mode==='orifice'?'selected':''}>수동 개도 오리피스</option><option value="fixed_p" ${p.valve_mode==='fixed_p'?'selected':''}>목표 저압 지정</option></select></div></div>
+      <div class="field"><div class="field-row"><label>유량계수·초크 상관식</label><select id="insVCorr" style="width:148px;"><option value="re_diam_cd" ${fc==='re_diam_cd'?'selected':''}>가변 Cd(D, Re, SC)</option><option value="hem_choked" ${fc==='hem_choked'?'selected':''}>2상 초크 플로우(HEM)</option><option value="const_cd" ${fc==='const_cd'?'selected':''}>고정 유량계수 Cd</option></select></div></div>
+      ${p.valve_mode === "txv_sh"
+        ? `<div class="field"><div class="field-row"><label>연결 센서</label><select id="insVSens" style="width:140px;"><option value="">(없음)</option>${sensors.map(s => `<option value="${s.id}" ${p.sensorNodeId===s.id?'selected':''}>${s.modelName}</option>`).join("")}</select></div></div>
+           <div class="field"><div class="field-row"><label>목표 과열도 SH [K]</label><input type="number" id="insVSH" value="${p.SH_target_K??6}" step="0.5"></div></div>`
+        : p.valve_mode === "orifice"
+          ? `<div class="field"><div class="field-row"><label>수동 개도율 [%]</label><input type="number" id="insVOpen" value="${p.opening_pct??50}" step="2"></div></div>`
+          : `<div class="field"><div class="field-row"><label>목표 P_out [bar]</label><input type="number" id="insP4" value="${p.P_out_bar}" step="0.1"></div></div>`}
+      <div class="field"><div class="field-row"><label>오리피스 지름 D [mm]</label><input type="number" id="insVD" value="${D_mm}" step="0.1"></div></div>
+      <div class="field"><div class="field-row"><label>A_max / 유효 Cd_eff</label><b>${A_max.toFixed(2)} mm² / <span style="color:var(--green)">${cdShow.toFixed(3)}</span></b></div></div>
+      ${isRes ? `<div class="res-box"><h3>팽창밸브 결과</h3>
+        ${resLineHTML("밸브 유효 개도율", `${n.result.metrics.opening_pct.toFixed(1)} %`, `node:${n.id}:opening_pct`, "var(--purple)")}
+        ${resLineHTML("유효 유량계수 Cd_eff", `${n.result.metrics.Cd_eff.toFixed(3)}`, `node:${n.id}:Cd_eff`, "var(--accent)")}
+        ${resLineHTML("초크 유동 여부", n.result.metrics.is_choked ? `⚠️ CHOKED (P_choke=${n.result.metrics.P_choke_bar.toFixed(2)}b)` : "Subcritical (비초크 정상)", "", n.result.metrics.is_choked ? "var(--danger)" : "var(--green)")}
+        ${resLineHTML("출구 압력 P4", `${n.result.outlet.P_bar.toFixed(2)} bar`, `node:${n.id}:P_out_bar`)}
+        ${resLineHTML("출구 온도 T4", `${n.result.outlet.T_C.toFixed(1)} °C`, `node:${n.id}:T_out_C`, "var(--hot)")}
+        ${resLineHTML("출구 건도 Quality (x4)", `${n.result.metrics.quality.toFixed(3)}`, `node:${n.id}:quality`)}
+        ${resLineHTML("팽창 압력강하 ΔP", `${n.result.metrics.dP_bar.toFixed(2)} bar`, `node:${n.id}:dP_bar`)}
+      </div>` : ""}`;
+    document.getElementById("insVMode").onchange = e => { p.valve_mode = e.target.value; maybeRun(); renderInspector(); };
+    document.getElementById("insVCorr").onchange = e => { p.flow_corr = e.target.value; maybeRun(); renderInspector(); };
+    const vs = document.getElementById("insVSens"); if (vs) vs.onchange = e => { p.sensorNodeId = e.target.value; maybeRun(); };
+    const vsh = document.getElementById("insVSH"); if (vsh) vsh.oninput = e => { p.SH_target_K = +e.target.value; maybeRun(); };
+    const vo = document.getElementById("insVOpen"); if (vo) vo.oninput = e => { p.opening_pct = +e.target.value; maybeRun(); };
+    const p4 = document.getElementById("insP4"); if (p4) p4.oninput = e => { p.P_out_bar = +e.target.value || 1; maybeRun(); };
+    document.getElementById("insVD").oninput = e => { p.orifice_D_mm = +e.target.value || 2.0; maybeRun(); renderInspector(); };
+  }
+
+  const fBind = document.getElementById("insFluidNode"); if (fBind) fBind.onchange = e => { n.params.fluidNodeId = e.target.value; maybeRun(); };
+  const odBtn = document.getElementById("openDetailTabBtn"); if (odBtn) odBtn.onclick = () => switchTab(n.id);
+  const rb = document.getElementById("rotBtn"); if (rb) rb.onclick = () => { n.rot = ((n.rot || 0) + 90) % 360; renderNodes(); renderWires(); };
+  bindResultLineDragEvents(inspectorBody);
+}
+
+// ================= 결과값 드래그 앤 드롭 -> OriginLab 스타일 시계열 그래프 =================
+const ORIGIN_COLORS = ["#000000", "#e11d48", "#0284c7", "#16a34a", "#7c3aed", "#d97706"];
+
+function bindResultLineDragEvents(root) {
+  if (!root) return;
+  root.querySelectorAll('.res-line[draggable="true"]').forEach(el => {
+    el.addEventListener("dragstart", e => {
+      const key = el.dataset.dragkey;
+      const lbl = el.dataset.draglabel;
+      e.dataTransfer.setData("text/plain", JSON.stringify({ key, label: lbl }));
+      canvasDropHint.classList.add("active");
+    });
+    el.addEventListener("dragend", () => {
+      canvasDropHint.classList.remove("active");
+    });
+  });
+}
+
+canvasWrap.addEventListener("dragover", e => {
+  e.preventDefault();
+  canvasDropHint.classList.add("active");
+});
+canvasWrap.addEventListener("dragleave", e => {
+  if (e.target === canvasWrap) canvasDropHint.classList.remove("active");
+});
+canvasWrap.addEventListener("drop", e => {
+  e.preventDefault();
+  canvasDropHint.classList.remove("active");
+  try {
+    const data = JSON.parse(e.dataTransfer.getData("text/plain"));
+    if (!data || !data.key) return;
+    if (!originSeriesList.some(s => s.key === data.key)) {
+      originSeriesList.push({
+        key: data.key,
+        label: data.label,
+        color: ORIGIN_COLORS[originSeriesList.length % ORIGIN_COLORS.length],
+        marker: originSeriesList.length % 3 // 0: square, 1: circle, 2: triangle
+      });
+    }
+    originPlotWin.classList.add("open");
+    recomputeAndDrawOriginPlot();
+  } catch {}
+});
+
+document.getElementById("originPlotHandle").addEventListener("mousedown", e => {
+  if (["BUTTON","SELECT","INPUT"].includes(e.target.tagName)) return;
+  draggingOriginWin = true;
+  const r = originPlotWin.getBoundingClientRect();
+  originWinOff = { x: e.clientX - r.left, y: e.clientY - r.top };
+});
+document.getElementById("originCloseBtn").onclick = () => originPlotWin.classList.remove("open");
+document.getElementById("originClearSeriesBtn").onclick = () => { originSeriesList = []; recomputeAndDrawOriginPlot(); };
+new ResizeObserver(() => { if (originPlotWin.classList.contains("open")) drawOriginCanvas(); }).observe(originPlotWin);
+
+let lastOriginTimePoints = [];
+
+function extractMetricFromSim(key, simNodes, simEdges, convergence) {
+  const parts = key.split(":");
+  if (parts[0] === "sys") {
+    const comp = simNodes.find(n => n.type === "compressor" && n.result);
+    const evap = simNodes.find(n => SM.isHxType(n.type) && n.result && !n.result.metrics.isCondenser);
+    const cond = simNodes.find(n => SM.isHxType(n.type) && n.result && n.result.metrics.isCondenser);
+    if (parts[1] === "COP") return (comp && evap && comp.result.metrics.W_shaft_kW > 0) ? (evap.result.metrics.Q_kW / comp.result.metrics.W_shaft_kW) : 0;
+    if (parts[1] === "charge_g") return convergence && convergence.conservation ? convergence.conservation.mass.total_g : 0;
+    if (parts[1] === "Q_evap") return evap ? evap.result.metrics.Q_kW : 0;
+    if (parts[1] === "Q_cond") return cond ? cond.result.metrics.Q_kW : 0;
+    if (parts[1] === "W_shaft") return comp ? comp.result.metrics.W_shaft_kW : 0;
+  } else if (parts[0] === "edge") {
+    const ed = simEdges.find(e => e.id === parts[1]);
+    if (!ed || !ed.stream) return 0;
+    return Number(ed.stream[parts[2]] ?? 0);
+  } else if (parts[0] === "node") {
+    const nd = simNodes.find(n => n.id === parts[1]);
+    if (!nd) return 0;
+    const f = parts[2];
+    if (SM.isSignalType(nd.type)) return nd.result ? nd.result.value : 0;
+    if (!nd.result) return 0;
+    if (f === "P1_bar") return nd.result.inlet ? nd.result.inlet.P_bar : 0;
+    if (f === "P2_bar" || f === "P_out_bar") return nd.result.outlet ? nd.result.outlet.P_bar : 0;
+    if (f === "T2_C" || f === "T_out_C") return nd.result.outlet ? nd.result.outlet.T_C : 0;
+    if (f === "m_dot") return nd.result.outlet ? nd.result.outlet.m_dot : 0;
+    if (f === "h_ref") return nd.result.metrics ? nd.result.metrics.h_ref_Wm2K : 0;
+    if (f === "h_sec") return nd.result.metrics ? nd.result.metrics.h_sec_Wm2K : 0;
+    if (f === "mass_g") return nd.result.metrics ? (nd.result.metrics.mass_kg * 1000) : 0;
+    if (f === "eff_pct") return nd.result.metrics ? (nd.result.metrics.eff_op * 100) : 0;
+    if (f === "W_fan_W") return nd.result.metrics ? (nd.result.metrics.W_fan_kW * 1000) : 0;
+    if (nd.result.metrics && nd.result.metrics[f] !== undefined) return Number(nd.result.metrics[f]);
+    if (nd.result[f] !== undefined) return Number(nd.result[f]);
+  }
+  return 0;
+}
+
+function recomputeAndDrawOriginPlot() {
+  if (!originPlotWin.classList.contains("open") || originSeriesList.length === 0) {
+    lastOriginTimePoints = [];
+    drawOriginCanvas();
+    return;
+  }
+  const cfg = getSimConfig();
+  const T_max = Math.max(1, cfg.sim_duration_s || 30);
+  const dt = Math.max(0.2, Math.min(T_max / 4, cfg.sim_dt_s || 1.0));
+  const { fluidName, refProp } = getActiveFluidInfo();
+  const baseOpts = getSolverOpts();
+
+  const pts = [];
+  const nSteps = Math.min(60, Math.max(5, Math.round(T_max / dt)));
+  for (let i = 0; i <= nSteps; i++) {
+    const t = Number(((T_max * i) / nSteps).toFixed(2));
+    const stepOpts = { ...baseOpts, simConfig: { ...cfg, t_sec: t } };
+    const { simNodes, simEdges, convergence } = SM.solve(nodes, edges, fluidName, refProp, stepOpts);
+    const row = { t };
+    originSeriesList.forEach(s => {
+      row[s.key] = extractMetricFromSim(s.key, simNodes, simEdges, convergence);
+    });
+    pts.push(row);
+  }
+  lastOriginTimePoints = pts;
+  drawOriginCanvas();
+}
+
+function drawOriginCanvas() {
+  const rect = originCanvas.getBoundingClientRect();
+  if (rect.width < 60 || rect.height < 60) return;
+  const dpr = window.devicePixelRatio || 1, W = Math.floor(rect.width), H = Math.floor(rect.height);
+  originCanvas.width = Math.floor(W * dpr); originCanvas.height = Math.floor(H * dpr);
+  const ctx = originCanvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, W, H);
+
+  if (originSeriesList.length === 0 || lastOriginTimePoints.length < 2) {
+    ctx.fillStyle = "#475569"; ctx.font = "bold 12.5px Arial, sans-serif"; ctx.textAlign = "center";
+    ctx.fillText("우측 결과창에서 결과 항목을 통합 캔버스로 드래그하면", W / 2, H / 2 - 10);
+    ctx.fillText("시간(0 ~ T [s])에 따른 Origin 과학 그래프가 그려집니다.", W / 2, H / 2 + 12);
+    return;
+  }
+
+  // OriginLab 학술 출판 스타일 레이아웃
+  const pad = { L: 66, R: 22, T: 24, B: 44 };
+  const pW = W - pad.L - pad.R, pH = H - pad.T - pad.B;
+  const tMin = lastOriginTimePoints[0].t, tMax = lastOriginTimePoints[lastOriginTimePoints.length - 1].t;
+
+  let yMin = Infinity, yMax = -Infinity;
+  lastOriginTimePoints.forEach(pt => {
+    originSeriesList.forEach(s => {
+      const v = pt[s.key];
+      if (v < yMin) yMin = v;
+      if (v > yMax) yMax = v;
+    });
+  });
+  if (!Number.isFinite(yMin)) { yMin = 0; yMax = 1; }
+  const span = yMax - yMin;
+  if (Math.abs(span) < 1e-6) {
+    const d = Math.max(1.0, Math.abs(yMax) * 0.1);
+    yMin -= d; yMax += d;
+  } else {
+    yMin -= span * 0.1; yMax += span * 0.15;
+  }
+
+  const xOf = t => pad.L + ((t - tMin) / Math.max(1e-9, tMax - tMin)) * pW;
+  const yOf = y => (H - pad.B) - ((y - yMin) / Math.max(1e-9, yMax - yMin)) * pH;
+
+  // 1) 미세 점선 격자 (Origin minor/major grid)
+  ctx.strokeStyle = "#e2e8f0"; ctx.lineWidth = 0.8; ctx.setLineDash([2, 3]);
+  for (let i = 1; i < 5; i++) {
+    const gx = pad.L + (pW * i) / 5;
+    ctx.beginPath(); ctx.moveTo(gx, pad.T); ctx.lineTo(gx, H - pad.B); ctx.stroke();
+    const gy = pad.T + (pH * i) / 5;
+    ctx.beginPath(); ctx.moveTo(pad.L, gy); ctx.lineTo(W - pad.R, gy); ctx.stroke();
+  }
+  ctx.setLineDash([]);
+
+  // 2) 데이터 곡선 및 Origin 마커 (사각형 ■, 원 ●, 삼각형 ▲)
+  originSeriesList.forEach(s => {
+    ctx.strokeStyle = s.color; ctx.lineWidth = 2.0;
+    ctx.beginPath();
+    lastOriginTimePoints.forEach((pt, idx) => {
+      const x = xOf(pt.t), y = yOf(pt[s.key]);
+      idx === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+
+    // 마커 렌더링
+    const stepMk = Math.max(1, Math.floor(lastOriginTimePoints.length / 18));
+    lastOriginTimePoints.forEach((pt, idx) => {
+      if (idx % stepMk !== 0 && idx !== lastOriginTimePoints.length - 1) return;
+      const x = xOf(pt.t), y = yOf(pt[s.key]);
+      ctx.fillStyle = s.color;
+      if (s.marker === 0) {
+        ctx.fillRect(x - 3.2, y - 3.2, 6.4, 6.4);
+      } else if (s.marker === 1) {
+        ctx.beginPath(); ctx.arc(x, y, 3.5, 0, Math.PI * 2); ctx.fill();
+      } else {
+        ctx.beginPath(); ctx.moveTo(x, y - 4.2); ctx.lineTo(x + 3.8, y + 3.2); ctx.lineTo(x - 3.8, y + 3.2); ctx.closePath(); ctx.fill();
+      }
+    });
+  });
+
+  // 3) Origin 4면 닫힌 굵은 검정 프레임 + 안쪽 눈금(Inward Ticks)
+  ctx.strokeStyle = "#000000"; ctx.lineWidth = 1.8;
+  ctx.strokeRect(pad.L, pad.T, pW, pH);
+
+  ctx.fillStyle = "#000000"; ctx.font = "bold 11px Arial, sans-serif";
+  // X축 눈금 (Major + Minor inward ticks)
+  ctx.textAlign = "center";
+  for (let i = 0; i <= 10; i++) {
+    const gx = pad.L + (pW * i) / 10;
+    const isMaj = (i % 2 === 0);
+    const tickLen = isMaj ? 6 : 3.5;
+    ctx.beginPath();
+    ctx.moveTo(gx, H - pad.B); ctx.lineTo(gx, H - pad.B - tickLen);
+    ctx.moveTo(gx, pad.T); ctx.lineTo(gx, pad.T + tickLen);
+    ctx.stroke();
+    if (isMaj) {
+      const tv = tMin + ((tMax - tMin) * i) / 10;
+      ctx.fillText(tv.toFixed(1), gx, H - pad.B + 16);
+    }
+  }
+  ctx.font = "bold 12px Arial, sans-serif";
+  ctx.fillText("Simulation Time, t [s]", pad.L + pW / 2, H - 8);
+
+  // Y축 눈금 (Major + Minor inward ticks)
+  ctx.textAlign = "right"; ctx.font = "bold 11px Arial, sans-serif";
+  for (let i = 0; i <= 10; i++) {
+    const gy = (H - pad.B) - (pH * i) / 10;
+    const isMaj = (i % 2 === 0);
+    const tickLen = isMaj ? 6 : 3.5;
+    ctx.beginPath();
+    ctx.moveTo(pad.L, gy); ctx.lineTo(pad.L + tickLen, gy);
+    ctx.moveTo(W - pad.R, gy); ctx.lineTo(W - pad.R - tickLen, gy);
+    ctx.stroke();
+    if (isMaj) {
+      const yv = yMin + ((yMax - yMin) * i) / 10;
+      const lbl = Math.abs(yv) >= 100 ? yv.toFixed(1) : (Math.abs(yv) >= 1 ? yv.toFixed(2) : yv.toFixed(3));
+      ctx.fillText(lbl, pad.L - 7, gy + 4);
+    }
+  }
+
+  // Y축 회전 타이틀
+  ctx.save();
+  ctx.translate(15, pad.T + pH / 2);
+  ctx.rotate(-Math.PI / 2);
+  ctx.textAlign = "center"; ctx.font = "bold 12px Arial, sans-serif";
+  ctx.fillText(originSeriesList.length === 1 ? originSeriesList[0].label : "Response Variables", 0, 0);
+  ctx.restore();
+
+  // 4) Origin 스타일 내부 박스형 범례 (Legend Box)
+  const legW = Math.min(220, pW - 16), legH = originSeriesList.length * 18 + 10;
+  const lx = pad.L + 10, ly = pad.T + 10;
+  ctx.fillStyle = "rgba(255,255,255,0.92)";
+  ctx.fillRect(lx, ly, legW, legH);
+  ctx.strokeStyle = "#000000"; ctx.lineWidth = 1.2;
+  ctx.strokeRect(lx, ly, legW, legH);
+
+  ctx.textAlign = "left"; ctx.font = "bold 11px Arial, sans-serif";
+  originSeriesList.forEach((s, idx) => {
+    const cy = ly + 13 + idx * 18;
+    ctx.strokeStyle = s.color; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(lx + 7, cy); ctx.lineTo(lx + 27, cy); ctx.stroke();
+    ctx.fillStyle = s.color;
+    ctx.fillRect(lx + 14, cy - 3, 6, 6);
+    ctx.fillStyle = "#000000";
+    ctx.fillText(s.label.slice(0, 22), lx + 33, cy + 4);
+  });
+}
+
+document.getElementById("originExportCsvBtn").onclick = () => {
+  if (!lastOriginTimePoints.length || !originSeriesList.length) return;
+  const hdr = ["Time_s", ...originSeriesList.map(s => s.label.replace(/,/g, " "))];
+  const rows = lastOriginTimePoints.map(pt => [pt.t, ...originSeriesList.map(s => Number(pt[s.key] ?? 0).toFixed(4))].join(","));
+  const csv = "\uFEFF" + [hdr.join(","), ...rows].join("\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8;" }));
+  a.download = "origin_timeseries.csv";
+  a.click();
+};
+
+// ================= 팔레트 추가 & 기본배치 (어큐뮬레이터 + TXV 감온통 센서 + Air/GW 유체 노드 + 직결 팬 기본 탑재!) =================
+document.querySelectorAll(".palette-item").forEach(item => {
+  item.onclick = () => {
+    const n = createNodeData(item.dataset.add, 100 + (nodes.length % 5) * 65, 50 + (nodes.length % 3) * 55, 0);
+    nodes.push(n); selectedNodeIds = new Set([n.id]); selectedEdgeId = null;
+    renderChromeTabs();
+    if (appMode === "solver") runSimulation(); else { renderNodes(); renderWires(); renderInspector(); }
+  };
+});
+
+function loadSampleCircuit() {
+  nodes = []; edges = []; nextId = 1; selectedEdgeId = null;
+  // 1) 컴팩트 시스템 제어 노드 (솔버 + 작동냉매 R134a + 상대측 유체 Air + 상대측 유체 GW)
+  const sv = createNodeData("solver", 18, 14, 0); nodes.push(sv);
+  const rf = createNodeData("refrigerant", 18, 92, 0);
+  rf.modelName = "냉매 (R134a)";
+  nodes.push(rf);
+
+  const airFluid = createNodeData("refrigerant", 18, 170, 0);
+  airFluid.modelName = "유체 (Air)";
+  airFluid.params.fluid = "Air"; airFluid.params.editFluid = "Air";
+  nodes.push(airFluid);
+
+  const gwFluid = createNodeData("refrigerant", 18, 248, 0);
+  gwFluid.modelName = "유체 (GW)";
+  gwFluid.params.fluid = "GW"; gwFluid.params.editFluid = "GW";
+  nodes.push(gwFluid);
+
+  // 2) 폐회로 컴포넌트: Comp -> Cond(Fin-Plate, 4포트) -> TXV -> Evap(PHX) -> Accumulator -> Comp
+  const comp = createNodeData("compressor", 145, 130, 270);
+  const cond = createNodeData("hx_fin_plate", 360, 42, 0);
+  cond.modelName = "응축기 (핀-플레이트)";
+  cond.params = { ...defaultHxParams("fin_plate"), fluidNodeId: rf.id, fin_type: "louver", ref_cond_corr: "shah_cond", sec_fluid: "Air", link_ambient: true, link_fan: true, T_sec_in: 35.0, m_sec_kgs: 1.2, m_sec_ref: 1.2 };
+
+  const valv = createNodeData("valve", 620, 130, 90);
+  valv.modelName = "팽창밸브 (TXV)";
+
+  const evap = createNodeData("hx_plate", 460, 230, 180);
+  evap.modelName = "증발기 (판형 PHX)";
+  evap.params = { ...defaultHxParams("plate"), fluidNodeId: rf.id, ref_evap_corr: "yan_lin", sec_phe_corr: "muley_manglik", sec_fluid: "GW", link_ambient: false, link_fan: false, T_sec_in: 18.0, m_sec_kgs: 0.35 };
+
+  const acc = createNodeData("accumulator", 265, 230, 180);
+  acc.modelName = "어큐뮬레이터";
+
+  // 3) 증발기~압축기 흡입 배관 과열도 센서 (P+T 감온통) + 핀-플레이트 공기측 포트에 직접 선 연결된 팬(P-Q)
+  const sens = createNodeData("sensor_sh", 370, 150, 0);
+  sens.modelName = "감온통 센서 (P+T)";
+
+  const fanNode = createNodeData("fan", 215, 12, 0);
+  fanNode.modelName = "응축기 팬 (P-Q)";
+  fanNode.params.targetHxId = cond.id;
+  cond.params.fanNodeId = fanNode.id;
+
+  nodes.push(comp, cond, valv, evap, acc, sens, fanNode);
+  edges.push(
+    { id: "e1", from: comp.id, to: cond.id, kind: "flow", stream: null },
+    { id: "e2", from: cond.id, to: valv.id, kind: "flow", stream: null },
+    { id: "e3", from: valv.id, to: evap.id, kind: "flow", stream: null },
+    { id: "e4", from: evap.id, to: acc.id, kind: "flow", stream: null },
+    { id: "e5", from: acc.id, to: comp.id, kind: "flow", stream: null },
+    { id: "e6", from: fanNode.id, to: cond.id, kind: "air", stream: null }
+  );
+  sens.params.measureEdgeId = "e4"; // 증발기 출구 배관 계측
+  valv.params.sensorNodeId = sens.id; // TXV 피드백 연결
+
+  selectedNodeIds = new Set([valv.id]);
+  activeTabId = "canvas";
+  renderChromeTabs(); computeAutoPlotView();
+  setAppMode("sketch", false);
+}
+
+document.getElementById("sampleBtn").onclick = loadSampleCircuit;
+document.getElementById("clearBtn").onclick = () => { nodes = []; edges = []; selectedNodeIds.clear(); selectedEdgeId = null; switchTab("canvas"); renderChromeTabs(); setAppMode("sketch", false); };
+document.getElementById("saveJsonBtn").onclick = () => {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([JSON.stringify({ simConfig: getSimConfig(), nodes: nodes.map(({ id, type, x, y, rot, modelName, params }) => ({ id, type, x, y, rot, modelName, params })), edges: edges.map(({ id, from, to, kind }) => ({ id, from, to, kind: kind || "flow" })) }, null, 2)], { type: "application/json" }));
+  a.download = "cycle_circuit.json"; a.click();
+};
+document.getElementById("loadJsonBtn").onclick = () => document.getElementById("jsonFileInput").click();
+document.getElementById("jsonFileInput").onchange = e => {
+  const f = e.target.files[0]; if (!f) return;
+  const r = new FileReader();
+  r.onload = ev => {
+    try {
+      const d = JSON.parse(ev.target.result);
+      if (d.simConfig) {
+        if (d.simConfig.comp_rpm) document.getElementById("cfgCompRpm").value = d.simConfig.comp_rpm;
+        if (d.simConfig.T_amb_C !== undefined) document.getElementById("cfgTamb").value = d.simConfig.T_amb_C;
+        if (d.simConfig.fan_rpm) document.getElementById("cfgFanRpm").value = d.simConfig.fan_rpm;
+        if (d.simConfig.t_sec !== undefined) document.getElementById("cfgTimeSec").value = d.simConfig.t_sec;
+        if (d.simConfig.sim_duration_s) document.getElementById("cfgSimDuration").value = d.simConfig.sim_duration_s;
+        if (d.simConfig.sim_dt_s) document.getElementById("cfgSimDt").value = d.simConfig.sim_dt_s;
+      }
+      nodes = (d.nodes || []).map(n => ({ ...n, result: null }));
+      edges = (d.edges || []).map(ed => ({ ...ed, kind: ed.kind || "flow", stream: null }));
+      nextId = nodes.length + edges.length + 10;
+      selectedNodeIds = new Set(); selectedEdgeId = null; switchTab("canvas"); renderChromeTabs();
+      if (appMode === "solver") runSimulation(true); else { renderNodes(); renderWires(); renderInspector(); }
+    } catch { alert("올바른 JSON 파일이 아닙니다."); }
+  };
+  r.readAsText(f); e.target.value = "";
+};
+
+window.addEventListener("resize", () => { drawPlot(); if (activeTabId !== "canvas" && lastConvergence) drawSolverChart(lastConvergence.history, "dtSolverCanvas"); });
+initFluidDB();
+syncPlotOptions();
+loadSampleCircuit();
+</script>
+</body>
+</html>
